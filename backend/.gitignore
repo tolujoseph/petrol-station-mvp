@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local database and uploaded evidence
+*.sqlite3
+media/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example

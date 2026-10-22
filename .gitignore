@@ -1,0 +1,31 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local databases and uploaded evidence
+*.sqlite3
+*.db
+media/
+
+# Node / React
+node_modules/
+dist/
+dist-ssr/
+
+# Logs and temporary files
+*.log
+.DS_Store
+*.local
+
+# Editors
+.idea/
+.vscode/*
+!.vscode/extensions.json
