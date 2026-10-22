@@ -201,22 +201,31 @@ function App() {
     }
   }
 
+
   async function uploadAllEvidence(activeDraft) {
     const ids = getReadingIds(activeDraft);
     const counts = { ...uploadedEvidence };
+
     for (const pumpId of selectedPumpIds) {
       const key = `pump-${pumpId}`;
       const count = await uploadEvidence(key, ids.pumps[pumpId], "pump");
-      counts[key] = (counts[key] ?? 0) + count;
+      if (count > 0) {
+        counts[key] = (counts[key] ?? 0) + count;
+      }
     }
+
     for (const tankId of selectedTankIds) {
       const key = `tank-${tankId}`;
       const count = await uploadEvidence(key, ids.tanks[tankId], "tank");
-      counts[key] = (counts[key] ?? 0) + count;
+      if (count > 0) {
+        counts[key] = (counts[key] ?? 0) + count;
+      }
     }
+
     setUploadedEvidence(counts);
     return counts;
   }
+
 
   function buildPayload() {
     const chosenPumps = pumps.filter((pump) => activePumpIds.has(Number(pump.id)));
@@ -267,57 +276,103 @@ function App() {
     return readResponse(detailResponse);
   }
 
+
   async function handleSave(event, mode) {
     event.preventDefault();
     setError("");
     setSuccess("");
     setSaving(true);
+
     try {
       const payload = buildPayload();
       const savedDraft = await persistDraft(payload);
+
       setDraft(savedDraft);
       setEntryDate(savedDraft.entry_date);
       setNotes(savedDraft.notes ?? "");
+
       const chosenPumpIds = savedDraft.pump_readings.map((item) => item.pump);
       const chosenTankIds = savedDraft.tank_readings.map((item) => item.tank);
+
       setSelectedPumpIds(chosenPumpIds);
       setSelectedTankIds(chosenTankIds);
-      setPumpReadings(Object.fromEntries(savedDraft.pump_readings.map((item) => [item.pump, item.closing_reading])));
-      setTankReadings(Object.fromEntries(savedDraft.tank_readings.map((item) => [item.tank, item.closing_reading])));
+
+      setPumpReadings(
+        Object.fromEntries(
+          savedDraft.pump_readings.map((item) => [
+            item.pump,
+            item.closing_reading,
+          ]),
+        ),
+      );
+
+      setTankReadings(
+        Object.fromEntries(
+          savedDraft.tank_readings.map((item) => [
+            item.tank,
+            item.closing_reading,
+          ]),
+        ),
+      );
+
       setUploadedEvidence((previous) => ({
         ...previous,
-        ...Object.fromEntries(savedDraft.pump_readings.map((item) => [`pump-${item.pump}`, item.evidence_count ?? 0])),
-        ...Object.fromEntries(savedDraft.tank_readings.map((item) => [`tank-${item.tank}`, item.evidence_count ?? 0])),
+        ...Object.fromEntries(
+          savedDraft.pump_readings.map((item) => [
+            `pump-${item.pump}`,
+            item.evidence_count ?? 0,
+          ]),
+        ),
+        ...Object.fromEntries(
+          savedDraft.tank_readings.map((item) => [
+            `tank-${item.tank}`,
+            item.evidence_count ?? 0,
+          ]),
+        ),
       }));
 
-      const evidenceCounts = await uploadAllEvidence(savedDraft);
+      // Photos remain supported, but are not required for submission.
+      await uploadAllEvidence(savedDraft);
+
       if (mode === "finalise") {
-        const missingPump = chosenPumpIds.find((id) => (evidenceCounts[`pump-${id}`] ?? 0) < 1);
-        const missingTank = chosenTankIds.find((id) => (evidenceCounts[`tank-${id}`] ?? 0) < 1);
-        if (missingPump || missingTank) {
-          throw new Error("Add at least one evidence photo for every selected pump and tank before submitting.");
-        }
         const csrfToken = await getCsrfToken();
-        const finaliseResponse = await fetch(`${API_BASE_URL}/daily-entries/${savedDraft.id}/finalise/`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "X-CSRFToken": csrfToken },
-        });
+
+        const finaliseResponse = await fetch(
+          `${API_BASE_URL}/daily-entries/${savedDraft.id}/finalise/`,
+          {
+            method: "POST",
+            credentials: "include",
+            headers: { "X-CSRFToken": csrfToken },
+          },
+        );
+
         const result = await readResponse(finaliseResponse);
+
         setDraft(null);
         resetForm();
         await refreshDrafts();
-        setSuccess(result.message || "Daily entry submitted and reconciled successfully.");
+
+        setSuccess(
+          result.message || "Daily entry submitted and reconciled successfully.",
+        );
       } else {
         await refreshDrafts();
         setDraft(null);
         resetForm();
-        setSuccess("Draft saved. You can continue later from your saved drafts.");
+
+        setSuccess(
+          "Draft saved. You can continue later from your saved drafts.",
+        );
       }
     } catch (err) {
       setError(err.message || "Could not save the daily entry.");
+
       if (draft) {
-        try { await refreshDrafts(); } catch { /* keep the original error visible */ }
+        try {
+          await refreshDrafts();
+        } catch {
+          // Keep the original error visible.
+        }
       }
     } finally {
       setSaving(false);

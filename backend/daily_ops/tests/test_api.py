@@ -218,6 +218,60 @@ class DailyEntryTransactionTests(TestCase):
         self.assertEqual(DailyResult.objects.count(), 0)
 
 
+    def test_submission_succeeds_without_evidence_photos(self):
+        payload = {
+            "entry_date": "2026-10-10",
+            "pump_readings": [
+                {
+                    "pump": self.pump.id,
+                    "closing_reading": "1100.00",
+                }
+            ],
+            "tank_readings": [
+                {
+                    "tank": self.tank.id,
+                    "closing_reading": "4900.00",
+                }
+            ],
+            "financial_transactions": [
+                {
+                    "product_type": "PMS",
+                    "transaction_type": "POS",
+                    "amount": "150000.00",
+                    "description": "Test POS sales",
+                }
+            ],
+        }
+
+        draft_response = self.client.post(
+            "/api/daily-entries/",
+            payload,
+            format="json",
+        )
+        self.assertEqual(draft_response.status_code, 201)
+
+        entry_id = draft_response.data["id"]
+
+        # Deliberately do not create any pump or tank evidence photos.
+        response = self.client.post(
+            f"/api/daily-entries/{entry_id}/finalise/",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], DailyEntry.Status.SUBMITTED)
+
+        entry = DailyEntry.objects.get(id=entry_id)
+        self.assertIsNotNone(entry.submitted_at)
+        self.assertTrue(
+            DailyResult.objects.filter(daily_entry=entry).exists()
+        )
+        self.assertEqual(PumpReadingEvidence.objects.count(), 0)
+        self.assertEqual(TankReadingEvidence.objects.count(), 0)
+
+
+
 class StationDataIsolationTests(TestCase):
     def setUp(self):
         self.client = APIClient()

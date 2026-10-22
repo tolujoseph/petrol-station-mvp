@@ -540,7 +540,6 @@ class TankEvidenceUploadView(EvidenceUploadBaseView):
     reading_relation = "tank_reading"
     input_serializer_class = EvidenceUploadSerializer
 
-
 class FinaliseDailyEntryView(APIView):
     permission_classes = [IsManager]
 
@@ -562,22 +561,6 @@ class FinaliseDailyEntryView(APIView):
                     "message": "This entry has already been submitted.",
                 })
 
-            for reading in entry.pump_readings.select_related("pump"):
-                if not reading.evidence_photos.exists():
-                    raise ValidationError({
-                        "evidence": (
-                            f"Add a photo for pump {reading.pump.label}."
-                        )
-                    })
-
-            for reading in entry.tank_readings.select_related("tank"):
-                if not reading.evidence_photos.exists():
-                    raise ValidationError({
-                        "evidence": (
-                            f"Add a photo for tank {reading.tank.label}."
-                        )
-                    })
-
             try:
                 simulation = simulate_daily_entry(entry)
                 save_daily_result(entry, simulation)
@@ -595,6 +578,7 @@ class FinaliseDailyEntryView(APIView):
             "status": entry.status,
             "message": "Daily entry submitted successfully.",
         })
+
 
 
 class EvidenceImageView(APIView):
