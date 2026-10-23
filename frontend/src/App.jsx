@@ -1,16 +1,29 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
+import ConfirmDialog from "./components/ConfirmDialog";
+import EquipmentCard from "./components/EquipmentCard";
+import EvidenceUploader from "./components/EvidenceUploader";
+import {
+  BrandMark,
+  IconAlert,
+  IconArrowRight,
+  IconCheckCircle,
+  IconClose,
+  IconDraft,
+  IconLock,
+  IconRefresh,
+  IconUnplug,
+  IconUser,
+} from "./components/Icons";
+import StepRail from "./components/StepRail";
+import { STEPS } from "./components/steps";
+import TransactionsLedger from "./components/TransactionsLedger";
+import { formatLongDate, formatMoney, formatShortDate } from "./format";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
+const API_ORIGIN = API_BASE_URL.replace(/\/api\/?$/, "");
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
-const TRANSACTION_TYPES = [
-  { value: "POS", label: "POS sales" },
-  { value: "cash_bank", label: "Cash / bank sales" },
-  { value: "CREDIT", label: "Credit sales" },
-  { value: "expense", label: "Expense" },
-  { value: "transfer", label: "Transfer" },
-  { value: "shell_deposit", label: "Shell deposit" },
-];
+const SALES_TYPES = ["POS", "cash_bank", "CREDIT"];
 
 function getToday() {
   const date = new Date();
@@ -41,7 +54,9 @@ async function readResponse(response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = data.detail || data.non_field_errors?.join(" ") || JSON.stringify(data);
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    const error = new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
@@ -70,6 +85,10 @@ function App() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [fatal, setFatal] = useState(null);
+  const [dialog, setDialog] = useState(null);
+  const [activeStep, setActiveStep] = useState(STEPS[0].id);
+  const bannerRef = useRef(null);
 
   const activePumpIds = useMemo(() => new Set(selectedPumpIds.map(Number)), [selectedPumpIds]);
   const activeTankIds = useMemo(() => new Set(selectedTankIds.map(Number)), [selectedTankIds]);
@@ -80,8 +99,9 @@ function App() {
     setDrafts(Array.isArray(data) ? data : []);
   }
 
-  useEffect(() => {
-    async function loadPage() {
+  const loadPage = useCallback(async () => {
+      setLoading(true);
+      setFatal(null);
       try {
         const csrfResponse = await fetch(`${API_BASE_URL}/auth/csrf/`, { credentials: "include" });
         if (!csrfResponse.ok) throw new Error("Could not initialise security protection.");
@@ -102,13 +122,20 @@ function App() {
         setTankReadings(Object.fromEntries(activeTanks.map((tank) => [tank.id, ""])));
         if (userData.role === "manager") await refreshDrafts();
       } catch (err) {
-        setError(err.message || "Could not load the station.");
+        const unauthenticated = err.status === 401 || err.status === 403;
+        const unreachable = err instanceof TypeError;
+        setFatal({
+          kind: unauthenticated ? "auth" : unreachable ? "network" : "other",
+          message: err.message || "Could not load the station.",
+        });
       } finally {
         setLoading(false);
       }
-    }
-    loadPage();
   }, []);
+
+  useEffect(() => {
+    loadPage();
+  }, [loadPage]);
 
   function resetForm() {
     setEntryDate(getToday());
@@ -412,144 +439,405 @@ function App() {
     }
   }
 
+
   function cancelEntry() {
-    const message = draft
-      ? "Leave this draft? Your saved draft will be kept, and you can resume it later. Unsaved changes in this session will be lost."
-      : "Cancel this entry? Any unsaved readings and selected photos will be lost.";
-    if (!window.confirm(message)) return;
-    setError("");
-    setSuccess(draft ? "Draft kept. You can resume it from Saved drafts." : "Entry cancelled.");
-    resetForm();
-    refreshDrafts().catch(() => {});
+    setDialog({
+      tone: "neutral",
+      title: draft ? "Leave this draft?" : "Cancel this entry?",
+      body: draft
+        ? "Your saved draft is kept and you can resume it later. Changes made since your last save will be lost."
+        : "Unsaved readings and selected photos will be lost.",
+      confirmLabel: draft ? "Leave draft" : "Cancel entry",
+      cancelLabel: "Keep editing",
+      onConfirm: () => {
+        setError("");
+        setSuccess(draft ? "Draft kept. Resume it from Saved drafts." : "Entry cancelled.");
+        resetForm();
+        refreshDrafts().catch(() => {});
+      },
+    });
   }
 
-  async function discardDraft(draftId) {
-    if (!window.confirm("Permanently discard this saved draft? Its readings and uploaded evidence will be deleted. This cannot be undone.")) return;
-    setError("");
-    setSuccess("");
-    try {
-      const csrfToken = await getCsrfToken();
-      const response = await fetch(`${API_BASE_URL}/daily-entries/${draftId}/`, {
-        method: "DELETE",
-        credentials: "include",
-        headers: { "X-CSRFToken": csrfToken },
-      });
-      await readResponse(response);
-      if (draft?.id === draftId) resetForm();
-      await refreshDrafts();
-      setSuccess("Draft discarded.");
-    } catch (err) {
-      setError(err.message || "Could not discard the draft.");
-    }
+  function discardDraft(draftId) {
+    setDialog({
+      tone: "danger",
+      title: "Discard this draft permanently?",
+      body: "Its readings and uploaded evidence will be deleted. This cannot be undone.",
+      confirmLabel: "Discard draft",
+      cancelLabel: "Keep draft",
+      onConfirm: async () => {
+        setError("");
+        setSuccess("");
+        try {
+          const csrfToken = await getCsrfToken();
+          const response = await fetch(`${API_BASE_URL}/daily-entries/${draftId}/`, {
+            method: "DELETE",
+            credentials: "include",
+            headers: { "X-CSRFToken": csrfToken },
+          });
+          await readResponse(response);
+          if (draft?.id === draftId) resetForm();
+          await refreshDrafts();
+          setSuccess("Draft discarded.");
+        } catch (err) {
+          setError(err.message || "Could not discard the draft.");
+        }
+      },
+    });
   }
 
-  function renderEvidenceUploader(key, readingId, evidenceType) {
-    const files = selectedPhotos[key] ?? [];
-    const count = uploadedEvidence[key] ?? 0;
-    const state = uploadStatus[key];
+  function updateTransaction(index, patch) {
+    setTransactions((previous) => previous.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)));
+  }
+
+  // ---- derived progress ----
+  const validReading = (value) => String(value ?? "").trim() !== "" && Number.isFinite(Number(value)) && Number(value) >= 0;
+  const pumpsEntered = selectedPumpIds.filter((id) => validReading(pumpReadings[id])).length;
+  const tanksEntered = selectedTankIds.filter((id) => validReading(tankReadings[id])).length;
+  const pumpsDone = selectedPumpIds.length > 0 && pumpsEntered === selectedPumpIds.length;
+  const tanksDone = selectedTankIds.length > 0 && tanksEntered === selectedTankIds.length;
+  const totals = useMemo(() => {
+    const sum = (predicate) => transactions.reduce((acc, row) => (predicate(row) && Number.isFinite(Number(row.amount)) ? acc + Number(row.amount || 0) : acc), 0);
+    return {
+      sales: sum((row) => SALES_TYPES.includes(row.transaction_type)),
+      expenses: sum((row) => row.transaction_type === "expense"),
+      count: transactions.filter((row) => String(row.amount).trim() !== "").length,
+    };
+  }, [transactions]);
+  const ready = Boolean(entryDate) && pumpsDone && tanksDone;
+  const photoCount = Object.values(uploadedEvidence).reduce((a, b) => a + b, 0) + Object.values(selectedPhotos).reduce((a, b) => a + b.length, 0);
+  const done = {
+    "step-date": Boolean(entryDate),
+    "step-pumps": pumpsDone,
+    "step-tanks": tanksDone,
+    "step-ledger": totals.count > 0,
+    "step-submit": ready,
+  };
+  const completed = Object.values(done).filter(Boolean).length;
+  const isManager = !loading && !fatal && currentUser?.role === "manager";
+
+  // scroll-spy for the step tracker
+  useEffect(() => {
+    if (!isManager) return undefined;
+    const sections = STEPS.map((step) => document.getElementById(step.id)).filter(Boolean);
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible[0]) setActiveStep(visible[0].target.id);
+      },
+      { rootMargin: "-20% 0px -60% 0px" },
+    );
+    sections.forEach((section) => observer.observe(section));
+    return () => observer.disconnect();
+  }, [isManager, draft]);
+
+  useEffect(() => {
+    if ((error || success) && bannerRef.current) bannerRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [error, success]);
+
+  function jumpTo(id) {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  const initials = (currentUser?.username || "?").slice(0, 2).toUpperCase();
+  const roleLabel = currentUser?.role ? currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1) : "";
+
+  function renderEvidence(key, readingId) {
     return (
-      <div className="evidence-section">
-        <div className="evidence-heading">
-          <div>
-            <label className="evidence-label">📸 Reading photo evidence</label>
-            <p className="evidence-help">Add a photo of the meter or dip reading.</p>
-          </div>
-          <span className={`evidence-indicator ${count > 0 || files.length > 0 ? "complete" : ""}`}>
-            {count > 0 ? `${count} photo(s) saved` : files.length ? `${files.length} selected` : "Photo required"}
-          </span>
-        </div>
-        <div className="evidence-choice-grid">
-          <label className="evidence-choice">
-            <span className="evidence-choice-icon">📷</span><span className="evidence-choice-title">Take photo</span><span className="evidence-choice-help">Use phone camera</span>
-            <input type="file" accept="image/*" capture="environment" disabled={saving} onChange={(event) => { addPhotos(key, event.target.files); event.target.value = ""; }} />
-          </label>
-          <label className="evidence-choice">
-            <span className="evidence-choice-icon">🖼️</span><span className="evidence-choice-title">Choose photos</span><span className="evidence-choice-help">From photo library</span>
-            <input type="file" accept="image/*" multiple disabled={saving} onChange={(event) => { addPhotos(key, event.target.files); event.target.value = ""; }} />
-          </label>
-        </div>
-        {files.length > 0 && <div className="photo-selection"><strong className="photo-selection-count">{files.length} photo(s) selected</strong><div className="photo-preview-grid">
-          {files.map((file, index) => <div className="photo-preview" key={`${file.name}-${file.lastModified}-${index}`}>
-            <img src={URL.createObjectURL(file)} alt={`Selected evidence ${index + 1}`} /><span title={file.name}>{file.name}</span>
-            <button type="button" className="remove-photo-button" disabled={saving} onClick={() => removePhoto(key, index)}>Remove</button>
-          </div>)}
-        </div></div>}
-        {state === "uploading" && <p className="evidence-status">Uploading photos...</p>}
-        {state === "uploaded" && <p className="evidence-status uploaded">✓ Photos uploaded</p>}
-        {state === "failed" && <p className="evidence-status failed">Upload failed. Save again to retry.</p>}
-        {!readingId && <p className="evidence-help">Photos will upload when you save the entry.</p>}
-      </div>
+      <EvidenceUploader
+        files={selectedPhotos[key] ?? []}
+        savedCount={uploadedEvidence[key] ?? 0}
+        status={uploadStatus[key]}
+        hasReading={Boolean(readingId)}
+        disabled={saving}
+        onAdd={(fileList) => addPhotos(key, fileList)}
+        onRemove={(index) => removePhoto(key, index)}
+      />
     );
   }
 
-  const formattedRole = currentUser?.role ? currentUser.role.charAt(0).toUpperCase() + currentUser.role.slice(1) : "Loading...";
+  function renderStateScreen() {
+    if (!fatal) return null;
+    const screens = {
+      auth: {
+        icon: <IconLock size={26} />,
+        title: "Sign in to continue",
+        body: "This workspace uses your station session. Sign in with your station account, then return here and reload.",
+        action: <a className="btn btn--primary" href={`${API_ORIGIN}/admin/login/`} target="_blank" rel="noreferrer">Open sign-in <IconArrowRight size={16} /></a>,
+      },
+      network: {
+        icon: <IconUnplug size={26} />,
+        title: "Can't reach the station server",
+        body: `The app couldn't connect to ${API_BASE_URL}. Check that the backend is running and that this address is correct.`,
+      },
+      other: {
+        icon: <IconAlert size={26} />,
+        title: "Something went wrong",
+        body: fatal.message,
+      },
+    };
+    const screen = screens[fatal.kind];
+    return (
+      <section className="state-screen">
+        <span className="state-screen__icon">{screen.icon}</span>
+        <h2>{screen.title}</h2>
+        <p>{screen.body}</p>
+        <div className="state-screen__actions">
+          {screen.action}
+          <button type="button" className="btn btn--outline" onClick={loadPage}><IconRefresh size={16} /> Try again</button>
+        </div>
+      </section>
+    );
+  }
 
   return (
-    <div className="app">
-      <header className="topbar"><div className="brand"><span className="brand-icon">⛽</span><div><h1>Javeln</h1><p>Petrol Station Management</p></div></div><span className="role-badge">{formattedRole}</span></header>
-      <main className="main-content">
-        <section className="page-heading"><p className="eyebrow">DAILY OPERATIONS</p><h2>Daily entry</h2><p>Record the readings and transactions, attach evidence, then submit when ready.</p>
-          {currentUser?.station && <div className="station-label"><span className="status-dot" />{currentUser.station}</div>}
-          {currentUser && <p className="user-label">Logged in as {currentUser.username}</p>}
-        </section>
-        {loading && <div className="notice">Loading your station...</div>}
-        {error && <div className="notice error" role="alert"><strong>Something needs attention</strong><p>{error}</p></div>}
-        {success && <div className="notice success" role="status"><strong>{success}</strong></div>}
+    <div className="shell">
+      <aside className="rail">
+        <div className="rail__brand">
+          <BrandMark size={38} />
+          <div>
+            <p className="rail__name">Javeln</p>
+            <p className="rail__sub">Forecourt Operations</p>
+          </div>
+        </div>
 
-        {!loading && currentUser?.role === "manager" && !draft && drafts.length > 0 && <section className="form-card saved-drafts-card">
-          <div className="section-heading"><span className="step-number">↻</span><div><h3>Saved drafts</h3><p>Resume an unfinished entry or explicitly discard it.</p></div></div>
-          {drafts.map((item) => <div className="saved-draft-row" key={item.id}>
-            <div><strong>{item.entry_date}</strong><p>Draft #{item.id} · {item.pump_count} pump(s), {item.tank_count} tank(s)</p></div>
-            <div className="draft-actions"><button type="button" className="secondary-button" onClick={() => resumeDraft(item.id)}>Resume draft</button><button type="button" className="text-danger-button" onClick={() => discardDraft(item.id)}>Discard</button></div>
-          </div>)}
-        </section>}
-
-        {!loading && currentUser?.role === "manager" && <form onSubmit={(event) => handleSave(event, "finalise")}>
-          <section className="form-card"><div className="section-heading"><span className="step-number">1</span><div><h3>Entry date</h3><p>Choose the business date for this entry.</p></div></div>
-            <div className="form-field"><label htmlFor="entryDate">Business date</label><input id="entryDate" type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} disabled={saving} required /></div>
-            <div className="form-field notes-field"><label htmlFor="entryNotes">Notes (optional)</label><textarea id="entryNotes" value={notes} onChange={(event) => setNotes(event.target.value)} disabled={saving} rows="3" placeholder="Add any notes about today's operations" /></div>
-            {draft && <p className="draft-context">Editing saved draft #{draft.id}. Changes are saved when you choose an action below.</p>}
-          </section>
-
-          <section className="form-card"><div className="section-heading"><span className="step-number">2</span><div><h3>Pump readings</h3><p>Select pumps used today, enter closing readings and attach evidence.</p></div></div>
-            {pumps.length === 0 && <p className="empty-state">No active pumps are configured for this station.</p>}
-            {pumps.map((pump) => { const key = `pump-${pump.id}`; const selected = activePumpIds.has(Number(pump.id)); return <div className={`reading-item ${!selected ? "equipment-not-selected" : ""}`} key={pump.id}>
-              <label className="equipment-used-toggle"><input type="checkbox" checked={selected} disabled={saving} onChange={(event) => toggleEquipment("pump", pump.id, event.target.checked)} /><span className="reading-name">{pump.label}</span><span className="equipment-type">{pump.product_type}</span><span className="used-label">Used today</span></label>
-              {selected && <><div className="reading-input"><label htmlFor={key}>Closing meter reading</label><input id={key} type="number" min="0" step="0.01" placeholder="Enter meter reading" value={pumpReadings[pump.id] ?? ""} onChange={(event) => updatePumpReading(pump.id, event.target.value)} disabled={saving} required /></div>{renderEvidenceUploader(key, getReadingIds(draft).pumps[pump.id], "pump")}</>}
-            </div>; })}
-          </section>
-
-          <section className="form-card"><div className="section-heading"><span className="step-number">3</span><div><h3>Tank readings</h3><p>Select tanks used today, enter closing dip readings and attach evidence.</p></div></div>
-            {tanks.length === 0 && <p className="empty-state">No active tanks are configured for this station.</p>}
-            {tanks.map((tank) => { const key = `tank-${tank.id}`; const selected = activeTankIds.has(Number(tank.id)); return <div className={`reading-item ${!selected ? "equipment-not-selected" : ""}`} key={tank.id}>
-              <label className="equipment-used-toggle"><input type="checkbox" checked={selected} disabled={saving} onChange={(event) => toggleEquipment("tank", tank.id, event.target.checked)} /><span className="reading-name">{tank.label}</span><span className="equipment-type">{tank.product_type}</span><span className="used-label">Used today</span></label>
-              {selected && <><div className="reading-input"><label htmlFor={key}>Closing dip reading</label><input id={key} type="number" min="0" step="0.01" placeholder="Enter dip reading" value={tankReadings[tank.id] ?? ""} onChange={(event) => updateTankReading(tank.id, event.target.value)} disabled={saving} required /></div>{renderEvidenceUploader(key, getReadingIds(draft).tanks[tank.id], "tank")}</>}
-            </div>; })}
-          </section>
-
-          <section className="form-card"><div className="section-heading"><span className="step-number">4</span><div><h3>Financial transactions</h3><p>Enter the day's recorded sales and expenses. Leave unused rows blank.</p></div></div>
-            {transactions.map((item, index) => <div className="transaction-row" key={index}>
-              <div className="form-field"><label htmlFor={`transaction-type-${index}`}>Transaction type</label><select id={`transaction-type-${index}`} value={item.transaction_type} disabled={saving} onChange={(event) => setTransactions((previous) => previous.map((row, rowIndex) => rowIndex === index ? { ...row, transaction_type: event.target.value } : row))}>{TRANSACTION_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}</select></div>
-              {item.transaction_type !== "expense" && <div className="form-field"><label htmlFor={`transaction-product-${index}`}>Product</label><select id={`transaction-product-${index}`} value={item.product_type} disabled={saving} onChange={(event) => setTransactions((previous) => previous.map((row, rowIndex) => rowIndex === index ? { ...row, product_type: event.target.value } : row))}><option value="PMS">PMS</option><option value="AGO">AGO</option></select></div>}
-              <div className="form-field"><label htmlFor={`transaction-amount-${index}`}>Amount (£)</label><input id={`transaction-amount-${index}`} type="number" min="0" step="0.01" value={item.amount} disabled={saving} onChange={(event) => setTransactions((previous) => previous.map((row, rowIndex) => rowIndex === index ? { ...row, amount: event.target.value } : row))} placeholder="0.00" /></div>
-              <div className="form-field"><label htmlFor={`transaction-description-${index}`}>Description (optional)</label><input id={`transaction-description-${index}`} value={item.description} disabled={saving} onChange={(event) => setTransactions((previous) => previous.map((row, rowIndex) => rowIndex === index ? { ...row, description: event.target.value } : row))} placeholder="Reference or note" /></div>
-              {transactions.length > 1 && <button type="button" className="text-danger-button remove-transaction" disabled={saving} onClick={() => setTransactions((previous) => previous.filter((_, rowIndex) => rowIndex !== index))}>Remove transaction</button>}
-            </div>)}
-            <button type="button" className="secondary-button add-transaction-button" disabled={saving} onClick={() => setTransactions((previous) => [...previous, emptyTransaction()])}>+ Add transaction</button>
-          </section>
-
-          <section className="form-card submit-card"><h3>{draft ? "Continue your draft" : "Finish this entry"}</h3><p>Submit finalises the entry and runs reconciliation. Saving keeps it as a draft so you can return later. Cancelling never deletes an already-saved draft.</p>
-            <div className="entry-action-row">
-              <button type="submit" className="primary-button" disabled={saving || !selectedPumpIds.length || !selectedTankIds.length}>{saving ? "Saving..." : "Submit entry"}</button>
-              <button type="button" className="secondary-button" disabled={saving} onClick={(event) => handleSave(event, "save")}>{saving ? "Saving..." : "Save and continue later"}</button>
-              <button type="button" className="cancel-button" disabled={saving} onClick={cancelEntry}>Cancel entry</button>
+        {isManager && (
+          <>
+            <div className="rail__block">
+              <p className="rail__kicker">Station</p>
+              <p className="rail__station">{currentUser.station || "Unassigned"}</p>
             </div>
-          </section>
-        </form>}
 
-        {!loading && currentUser?.role === "owner" && <section className="form-card"><h3>Owner dashboard</h3><p>Daily results, discrepancy reports and station settings are the next frontend workstream.</p></section>}
-        {!loading && currentUser && !["manager", "owner"].includes(currentUser.role) && <section className="notice">Your account role is not configured for this page.</section>}
-      </main>
+            <div className="rail__block">
+              <div className="rail__kicker-row">
+                <p className="rail__kicker">Entry progress</p>
+                <p className="rail__count">{completed}/{STEPS.length}</p>
+              </div>
+              <div className="meter" role="progressbar" aria-valuemin={0} aria-valuemax={STEPS.length} aria-valuenow={completed} aria-label="Entry progress">
+                <span className="meter__fill" style={{ width: `${(completed / STEPS.length) * 100}%` }} />
+              </div>
+              <StepRail activeId={activeStep} done={done} onJump={jumpTo} />
+            </div>
+
+            <div className="rail__block rail__block--summary">
+              <p className="rail__kicker">Shift summary</p>
+              <dl className="summary">
+                <div><dt>Pumps recorded</dt><dd>{pumpsEntered}<span>/{selectedPumpIds.length}</span></dd></div>
+                <div><dt>Tanks recorded</dt><dd>{tanksEntered}<span>/{selectedTankIds.length}</span></dd></div>
+                <div><dt>Evidence photos</dt><dd>{photoCount}</dd></div>
+                <div className="summary__money"><dt>Sales logged</dt><dd>{formatMoney(totals.sales)}</dd></div>
+                <div className="summary__money"><dt>Expenses</dt><dd>{formatMoney(totals.expenses)}</dd></div>
+              </dl>
+            </div>
+          </>
+        )}
+
+        <div className="rail__spacer" />
+        <div className="rail__user">
+          <span className="avatar">{currentUser ? initials : <IconUser size={16} />}</span>
+          <div>
+            <p className="rail__username">{currentUser?.username ?? (loading ? "Connecting…" : "Signed out")}</p>
+            <p className="rail__role">{roleLabel || "—"}</p>
+          </div>
+        </div>
+      </aside>
+
+      <div className="workspace">
+        <header className="mobilebar">
+          <BrandMark size={30} />
+          <div className="mobilebar__text">
+            <strong>Javeln</strong>
+            <span>{currentUser?.station || "Forecourt Operations"}</span>
+          </div>
+          {isManager && <span className="mobilebar__progress">{completed}/{STEPS.length}</span>}
+        </header>
+
+        <main className="main">
+          <div className="pagehead">
+            <div>
+              <p className="eyebrow">Daily operations · End-of-day close</p>
+              <h1>Daily entry</h1>
+            </div>
+            {isManager && (
+              <div className={`entrystate ${draft ? "entrystate--draft" : ""}`}>
+                <span className="entrystate__dot" />
+                {draft ? `Editing draft #${draft.id}` : "New entry"}
+              </div>
+            )}
+          </div>
+
+          <div ref={bannerRef} className="banners" aria-live="polite">
+            {error && (
+              <div className="banner banner--error" role="alert">
+                <IconAlert size={20} />
+                <div><strong>Needs attention</strong><p>{error}</p></div>
+                <button type="button" className="icon-btn" onClick={() => setError("")} aria-label="Dismiss"><IconClose size={16} /></button>
+              </div>
+            )}
+            {success && (
+              <div className="banner banner--success" role="status">
+                <IconCheckCircle size={20} />
+                <div><strong>{success}</strong></div>
+                <button type="button" className="icon-btn" onClick={() => setSuccess("")} aria-label="Dismiss"><IconClose size={16} /></button>
+              </div>
+            )}
+          </div>
+
+          {loading && (
+            <div className="skeleton" aria-busy="true" aria-label="Loading your station">
+              <span /><span /><span />
+            </div>
+          )}
+
+          {renderStateScreen()}
+
+          {isManager && drafts.length > 0 && !draft && (
+            <section className="panel panel--drafts" aria-labelledby="drafts-title">
+              <div className="panel__head">
+                <p className="panel__tag">Resume</p>
+                <h2 id="drafts-title">Saved drafts</h2>
+                <p className="panel__lede">Pick up an unfinished entry, or discard it for good.</p>
+              </div>
+              <ul className="drafts">
+                {drafts.map((item) => (
+                  <li className="drafts__row" key={item.id}>
+                    <span className="drafts__icon"><IconDraft size={20} /></span>
+                    <div className="drafts__meta">
+                      <strong>{formatShortDate(item.entry_date)}</strong>
+                      <span>Draft #{item.id} · {item.pump_count} pump{item.pump_count === 1 ? "" : "s"} · {item.tank_count} tank{item.tank_count === 1 ? "" : "s"}</span>
+                    </div>
+                    <div className="drafts__actions">
+                      <button type="button" className="btn btn--secondary btn--sm" onClick={() => resumeDraft(item.id)}>Resume</button>
+                      <button type="button" className="btn btn--text-danger btn--sm" onClick={() => discardDraft(item.id)}>Discard</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {isManager && (
+            <form onSubmit={(event) => handleSave(event, "finalise")} noValidate={false}>
+              <section className="panel" id="step-date" aria-labelledby="date-title">
+                <div className="panel__head">
+                  <p className="panel__tag">Section 01</p>
+                  <h2 id="date-title">Business date</h2>
+                  <p className="panel__lede">The trading day this entry closes out.</p>
+                </div>
+                <div className="date-grid">
+                  <div className="field">
+                    <label htmlFor="entryDate">Business date</label>
+                    <input id="entryDate" type="date" value={entryDate} onChange={(event) => setEntryDate(event.target.value)} disabled={saving} required />
+                    <p className="field__help">{formatLongDate(entryDate)}</p>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="entryNotes">Shift notes <span className="field__opt">optional</span></label>
+                    <textarea id="entryNotes" value={notes} onChange={(event) => setNotes(event.target.value)} disabled={saving} rows="3" placeholder="Deliveries, outages, incidents or anything the owner should know" />
+                  </div>
+                </div>
+              </section>
+
+              <section className="panel" id="step-pumps" aria-labelledby="pumps-title">
+                <div className="panel__head">
+                  <p className="panel__tag">Section 02 · {pumpsEntered}/{selectedPumpIds.length} recorded</p>
+                  <h2 id="pumps-title">Pump meters</h2>
+                  <p className="panel__lede">Switch on each pump used today, then record its closing meter reading.</p>
+                </div>
+                {pumps.length === 0 && <p className="empty">No active pumps are configured for this station.</p>}
+                <div className="units">
+                  {pumps.map((pump) => {
+                    const key = `pump-${pump.id}`;
+                    return (
+                      <EquipmentCard key={pump.id} type="pump" item={pump} selected={activePumpIds.has(Number(pump.id))} value={pumpReadings[pump.id]} disabled={saving} onToggle={(checked) => toggleEquipment("pump", pump.id, checked)} onChange={(value) => updatePumpReading(pump.id, value)}>
+                        {renderEvidence(key, getReadingIds(draft).pumps[pump.id])}
+                      </EquipmentCard>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="panel" id="step-tanks" aria-labelledby="tanks-title">
+                <div className="panel__head">
+                  <p className="panel__tag">Section 03 · {tanksEntered}/{selectedTankIds.length} recorded</p>
+                  <h2 id="tanks-title">Tank dips</h2>
+                  <p className="panel__lede">Switch on each tank in use and record its closing dip reading.</p>
+                </div>
+                {tanks.length === 0 && <p className="empty">No active tanks are configured for this station.</p>}
+                <div className="units">
+                  {tanks.map((tank) => {
+                    const key = `tank-${tank.id}`;
+                    return (
+                      <EquipmentCard key={tank.id} type="tank" item={tank} selected={activeTankIds.has(Number(tank.id))} value={tankReadings[tank.id]} disabled={saving} onToggle={(checked) => toggleEquipment("tank", tank.id, checked)} onChange={(value) => updateTankReading(tank.id, value)}>
+                        {renderEvidence(key, getReadingIds(draft).tanks[tank.id])}
+                      </EquipmentCard>
+                    );
+                  })}
+                </div>
+              </section>
+
+              <section className="panel" id="step-ledger" aria-labelledby="ledger-title">
+                <div className="panel__head">
+                  <p className="panel__tag">Section 04</p>
+                  <h2 id="ledger-title">Transactions</h2>
+                  <p className="panel__lede">Record the day's sales and expenses. Rows left without an amount are ignored.</p>
+                </div>
+                <TransactionsLedger
+                  rows={transactions}
+                  disabled={saving}
+                  onChange={updateTransaction}
+                  onAdd={() => setTransactions((previous) => [...previous, emptyTransaction()])}
+                  onRemove={(index) => setTransactions((previous) => previous.filter((_, rowIndex) => rowIndex !== index))}
+                />
+                <div className="ledger-total">
+                  <div><span>Sales logged</span><strong>{formatMoney(totals.sales)}</strong></div>
+                  <div><span>Expenses</span><strong>{formatMoney(totals.expenses)}</strong></div>
+                </div>
+              </section>
+
+              <section className="panel panel--submit" id="step-submit" aria-labelledby="submit-title">
+                <div className="hazard" aria-hidden="true" />
+                <div className="submit">
+                  <div className="submit__copy">
+                    <p className="panel__tag">Section 05</p>
+                    <h2 id="submit-title">{draft ? "Continue your draft" : "Review & submit"}</h2>
+                    <p className="panel__lede">Submitting finalises the entry and runs reconciliation. Saving keeps it as a draft to finish later.</p>
+                    <ul className="checks">
+                      <li className={entryDate ? "ok" : ""}>Business date set</li>
+                      <li className={pumpsDone ? "ok" : ""}>Pump readings · {pumpsEntered}/{selectedPumpIds.length}</li>
+                      <li className={tanksDone ? "ok" : ""}>Tank readings · {tanksEntered}/{selectedTankIds.length}</li>
+                      <li className={photoCount > 0 ? "ok" : ""}>Evidence photos · {photoCount}</li>
+                    </ul>
+                  </div>
+                  <div className="submit__actions">
+                    <button type="submit" className="btn btn--primary btn--lg" disabled={saving || !selectedPumpIds.length || !selectedTankIds.length}>{saving ? "Working…" : "Submit entry"}{!saving && <IconArrowRight size={18} />}</button>
+                    <button type="button" className="btn btn--secondary" disabled={saving} onClick={(event) => handleSave(event, "save")}>{saving ? "Working…" : "Save and continue later"}</button>
+                    <button type="button" className="btn btn--ghost" disabled={saving} onClick={cancelEntry}>Cancel entry</button>
+                  </div>
+                </div>
+              </section>
+            </form>
+          )}
+
+          {!loading && !fatal && currentUser?.role === "owner" && (
+            <section className="panel">
+              <div className="panel__head">
+                <p className="panel__tag">Owner</p>
+                <h2>Owner dashboard</h2>
+                <p className="panel__lede">Daily results, discrepancy reports and station settings are the next frontend workstream.</p>
+              </div>
+            </section>
+          )}
+          {!loading && !fatal && currentUser && !["manager", "owner"].includes(currentUser.role) && (
+            <section className="state-screen">
+              <span className="state-screen__icon"><IconLock size={26} /></span>
+              <h2>No access configured</h2>
+              <p>Your account ({currentUser.username}) has no manager or owner role. Ask an administrator to assign one.</p>
+            </section>
+          )}
+        </main>
+      </div>
+
+      <ConfirmDialog dialog={dialog} onClose={() => setDialog(null)} />
     </div>
   );
 }
