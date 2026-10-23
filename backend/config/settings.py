@@ -55,6 +55,7 @@ AUTH_USER_MODEL = "daily_ops.User"
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -90,7 +91,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': os.environ.get('DJANGO_DB_PATH', BASE_DIR / 'db.sqlite3'),
     }
 }
 
@@ -130,6 +131,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
 # Email
@@ -150,19 +152,34 @@ REST_FRAMEWORK = {
     ],
 }
 
+def _env_list(name):
+    return [item.strip() for item in os.environ.get(name, "").split(",") if item.strip()]
+
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
+    *_env_list("DJANGO_CORS_ALLOWED_ORIGINS"),
 ]
 
 CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
+    *_env_list("DJANGO_CSRF_TRUSTED_ORIGINS"),
 ]
+
+# Behind a TLS-terminating proxy (e.g. Cloud Run) Django must trust the forwarded scheme,
+# otherwise HTTPS requests fail CSRF origin checks.
+if os.environ.get("DJANGO_BEHIND_PROXY", "").lower() == "true":
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    USE_X_FORWARDED_HOST = True
+
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
 
 LOGIN_REDIRECT_URL = "/api/auth/me/"
 LOGOUT_REDIRECT_URL = "/api/auth/me/"
 
 # Local media storage for development.
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = os.environ.get("DJANGO_MEDIA_ROOT", BASE_DIR / "media")
