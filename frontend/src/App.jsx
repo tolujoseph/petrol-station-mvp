@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import ConfirmDialog from "./components/ConfirmDialog";
+import HistoryView from "./components/HistoryView";
 import EquipmentCard from "./components/EquipmentCard";
 import EvidenceUploader from "./components/EvidenceUploader";
 import {
@@ -10,6 +11,8 @@ import {
   IconCheckCircle,
   IconClose,
   IconDraft,
+  IconEdit,
+  IconHistory,
   IconLock,
   IconRefresh,
   IconUnplug,
@@ -89,6 +92,18 @@ function App() {
   const [dialog, setDialog] = useState(null);
   const [activeStep, setActiveStep] = useState(STEPS[0].id);
   const bannerRef = useRef(null);
+  const [view, setView] = useState(() => (window.location.hash === "#/history" ? "history" : "entry"));
+
+  useEffect(() => {
+    const onHashChange = () => setView(window.location.hash === "#/history" ? "history" : "entry");
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  function goTo(next) {
+    window.location.hash = next === "history" ? "#/history" : "#/";
+    window.scrollTo({ top: 0 });
+  }
 
   const activePumpIds = useMemo(() => new Set(selectedPumpIds.map(Number)), [selectedPumpIds]);
   const activeTankIds = useMemo(() => new Set(selectedTankIds.map(Number)), [selectedTankIds]);
@@ -514,7 +529,7 @@ function App() {
     "step-submit": ready,
   };
   const completed = Object.values(done).filter(Boolean).length;
-  const isManager = !loading && !fatal && currentUser?.role === "manager";
+  const isManager = !loading && !fatal && currentUser?.role === "manager" && view === "entry";
 
   // scroll-spy for the step tracker
   useEffect(() => {
@@ -601,6 +616,13 @@ function App() {
           </div>
         </div>
 
+        {currentUser && !fatal && (
+          <nav className="rail__nav" aria-label="Main">
+            <button type="button" className={`navlink ${view === "entry" ? "is-active" : ""}`} aria-current={view === "entry" ? "page" : undefined} onClick={() => goTo("entry")}><IconEdit size={18} /> Daily entry</button>
+            <button type="button" className={`navlink ${view === "history" ? "is-active" : ""}`} aria-current={view === "history" ? "page" : undefined} onClick={() => goTo("history")}><IconHistory size={18} /> History</button>
+          </nav>
+        )}
+
         {isManager && (
           <>
             <div className="rail__block">
@@ -650,13 +672,23 @@ function App() {
             <span>{currentUser?.station || "Forecourt Operations"}</span>
           </div>
           {isManager && <span className="mobilebar__progress">{completed}/{STEPS.length}</span>}
+          {currentUser && !fatal && (
+            <nav className="mobilenav" aria-label="Main">
+              <button type="button" className={view === "entry" ? "is-active" : ""} onClick={() => goTo("entry")}><IconEdit size={16} /> Daily entry</button>
+              <button type="button" className={view === "history" ? "is-active" : ""} onClick={() => goTo("history")}><IconHistory size={16} /> History</button>
+            </nav>
+          )}
         </header>
 
         <main className="main">
+          {view === "history" && !loading && !fatal && currentUser ? (
+            <HistoryView apiBaseUrl={API_BASE_URL} canEnter={currentUser.role === "manager"} onGoToEntry={() => goTo("entry")} />
+          ) : (
+          <>
           <div className="pagehead">
             <div>
-              <p className="eyebrow">Daily operations · End-of-day close</p>
-              <h1>Daily entry</h1>
+              <p className="eyebrow">{view === "history" ? "Records · Submitted entries" : "Daily operations · End-of-day close"}</p>
+              <h1>{view === "history" ? "History" : "Daily entry"}</h1>
             </div>
             {isManager && (
               <div className={`entrystate ${draft ? "entrystate--draft" : ""}`}>
@@ -833,6 +865,8 @@ function App() {
               <h2>No access configured</h2>
               <p>Your account ({currentUser.username}) has no manager or owner role. Ask an administrator to assign one.</p>
             </section>
+          )}
+          </>
           )}
         </main>
       </div>

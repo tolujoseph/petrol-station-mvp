@@ -20,7 +20,7 @@ The frontend has no login page yet and uses your Django session, so **sign in at
 
 ## Demo logins
 
-Created by `python manage.py seed_demo` (password `demo12345`, override with `DEMO_PASSWORD`):
+Created by `python manage.py seed_demo` (also adds product prices, reconciliation settings and 14 days of reconciled history; `--days 0` skips the history) (password `demo12345`, override with `DEMO_PASSWORD`):
 
 | User | Role |
 |---|---|

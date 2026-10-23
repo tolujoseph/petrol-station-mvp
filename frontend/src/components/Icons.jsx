@@ -48,3 +48,7 @@ export function BrandMark({ size = 40 }) {
     </svg>
   );
 }
+
+export const IconHistory = (p) => <Icon {...p}><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5M3.5 4v4.5H8" /><path d="M12 7.5V12l3 2" /></Icon>;
+export const IconChevronDown = (p) => <Icon {...p}><path d="m6 9 6 6 6-6" /></Icon>;
+export const IconEdit = (p) => <Icon {...p}><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="m13.5 6.5 4 4" /></Icon>;
