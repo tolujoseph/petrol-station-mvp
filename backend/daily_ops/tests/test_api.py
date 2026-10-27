@@ -421,6 +421,46 @@ class StationDataIsolationTests(TestCase):
         returned_ids = [item["id"] for item in response.data]
         self.assertEqual(returned_ids, [self.result_a.id])
 
+    def test_managers_only_see_their_own_results(self):
+        manager_one = User.objects.create_user(
+            username="manager_one",
+            password="test-password-123",
+            station=self.station_a,
+            role=User.Role.MANAGER,
+        )
+        manager_two = User.objects.create_user(
+            username="manager_two",
+            password="test-password-123",
+            station=self.station_a,
+            role=User.Role.MANAGER,
+        )
+        own_result = self.create_daily_result(
+            station=self.station_a,
+            manager=manager_one,
+            entry_date="2026-10-09",
+        )
+        other_result = self.create_daily_result(
+            station=self.station_a,
+            manager=manager_two,
+            entry_date="2026-10-10",
+        )
+
+        self.client.force_authenticate(user=manager_one)
+        for url in ("/api/reports/daily-results/", "/api/reports/discrepancies/"):
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual([item["id"] for item in response.data], [own_result.id])
+
+        grouped = self.client.get("/api/reports/daily-results/?group_by=day")
+        self.assertEqual([item["period"] for item in grouped.data["results"]], ["2026-10-09"])
+
+        self.authenticate_station_a()
+        response = self.client.get("/api/reports/daily-results/")
+        self.assertEqual(
+            [item["id"] for item in response.data],
+            [other_result.id, own_result.id, self.result_a.id],
+        )
+
     def test_latest_official_submission_is_returned(self):
         self.authenticate_station_a()
 

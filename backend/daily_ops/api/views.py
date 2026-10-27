@@ -785,6 +785,10 @@ class DailyResultListView(APIView):
             "-daily_entry__created_at",
         )
 
+        # Managers only see the days they submitted themselves; owners see the whole station.
+        if request.user.role == User.Role.MANAGER:
+            results = results.filter(daily_entry__manager=request.user)
+
         results = apply_report_date_filters(
             results,
             request.query_params,
@@ -826,6 +830,10 @@ class DiscrepancyReportView(APIView):
             "-daily_entry__entry_date",
             "-daily_entry__created_at",
         )
+
+        # Managers only see the days they submitted themselves; owners see the whole station.
+        if request.user.role == User.Role.MANAGER:
+            results = results.filter(daily_entry__manager=request.user)
 
         results = apply_report_date_filters(
             results,
