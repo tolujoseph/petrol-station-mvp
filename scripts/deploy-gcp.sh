@@ -7,7 +7,10 @@ cd "$(dirname "$0")/../backend"
 PROJECT="${GCP_PROJECT:?Set GCP_PROJECT to the target project id}"
 REGION="${GCP_REGION:-europe-west1}"
 SERVICE="${GCP_SERVICE:-petrol-station-api}"
-EXTRA_ORIGINS="${FRONTEND_ORIGINS:-}"   # comma-separated deployed frontend origins, e.g. https://app.example.com
+# Comma-separated deployed frontend origins. The Vercel frontend proxies /api to this service, so its host must be
+# an allowed host and a trusted CSRF origin.
+EXTRA_ORIGINS="${FRONTEND_ORIGINS:-https://petrol-station-frontend.vercel.app}"
+EXTRA_HOSTS="$(echo "$EXTRA_ORIGINS" | sed -E 's#https?://##g')"
 
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
 SERVICE_URL="https://${SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"
@@ -22,8 +25,8 @@ ENV_FILE="$(mktemp)"; trap 'rm -f "$ENV_FILE"' EXIT
 cat > "$ENV_FILE" <<YAML
 DJANGO_DEBUG: "false"
 DJANGO_SECRET_KEY: "${SECRET_KEY}"
-DJANGO_ALLOWED_HOSTS: ".run.app,localhost"
-DJANGO_CSRF_TRUSTED_ORIGINS: "${SERVICE_URL}"
+DJANGO_ALLOWED_HOSTS: ".run.app,localhost${EXTRA_HOSTS:+,$EXTRA_HOSTS}"
+DJANGO_CSRF_TRUSTED_ORIGINS: "${SERVICE_URL}${EXTRA_ORIGINS:+,$EXTRA_ORIGINS}"
 DJANGO_CORS_ALLOWED_ORIGINS: "${EXTRA_ORIGINS}"
 DJANGO_BEHIND_PROXY: "true"
 DJANGO_DB_PATH: "/app/data/db.sqlite3"
