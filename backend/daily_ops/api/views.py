@@ -21,6 +21,7 @@ from ..models import (
     DailyEntry,
     DailyResult,
     FinancialTransaction,
+    FuelDelivery,
     ProductSettings,
     ReconciliationSettings,
     Pump,
@@ -33,7 +34,7 @@ from ..models import (
 )
 from ..services.orchestration import simulate_daily_entry, save_daily_result
 from ..services.querysets import official_daily_entry_ids
-from .permissions import IsManager
+from .permissions import IsManager, IsStationAdmin
 from .serializers import (
     DailyEntrySerializer,
     DailyResultSerializer,
@@ -68,6 +69,7 @@ class CurrentUserView(APIView):
             "role": user.role,
             "station": user.station.name if user.station else None,
             "station_id": user.station_id,
+            "is_admin": user.is_staff,
         })
 
 
@@ -866,3 +868,78 @@ class DiscrepancyReportView(APIView):
         return Response(
             DailyResultSerializer(results, many=True).data
         )
+
+
+# ---------------------------------------------------------------------
+# Admin: delete a day or clear all of a station's records
+# ---------------------------------------------------------------------
+
+CLEAR_ALL_PHRASE = "DELETE ALL"
+
+
+def station_record_counts(station):
+    entries = DailyEntry.objects.filter(station=station)
+    return {
+        "submitted_days": DailyResult.objects.filter(daily_entry__station=station).count(),
+        "entries": entries.count(),
+        "drafts": entries.filter(status=DailyEntry.Status.DRAFT).count(),
+        "transactions": FinancialTransaction.objects.filter(daily_entry__station=station).count(),
+        "photos": (
+            PumpReadingEvidence.objects.filter(pump_reading__daily_entry__station=station).count()
+            + TankReadingEvidence.objects.filter(tank_reading__daily_entry__station=station).count()
+        ),
+        "deliveries": FuelDelivery.objects.filter(tank__station=station).count(),
+    }
+
+
+def delete_entries(entries):
+    """Delete daily entries (readings, money lines, results and photos cascade) and their image files."""
+    entries = list(entries)
+    evidence = [
+        *PumpReadingEvidence.objects.filter(pump_reading__daily_entry__in=entries),
+        *TankReadingEvidence.objects.filter(tank_reading__daily_entry__in=entries),
+    ]
+    schedule_evidence_file_deletion(evidence)
+    DailyEntry.objects.filter(id__in=[entry.id for entry in entries]).delete()
+    return len(entries)
+
+
+class AdminSummaryView(APIView):
+    permission_classes = [IsStationAdmin]
+
+    def get(self, request):
+        return Response({
+            **station_record_counts(request.user.station),
+            "clear_all_phrase": CLEAR_ALL_PHRASE,
+        })
+
+
+class AdminDayDeleteView(APIView):
+    """Delete every entry (official, superseded and drafts) for one date, so no older version resurfaces."""
+    permission_classes = [IsStationAdmin]
+
+    def delete(self, request, entry_date):
+        day = parse_report_date(entry_date, "entry_date")
+        station = request.user.station
+        with transaction.atomic():
+            entries = DailyEntry.objects.select_for_update().filter(station=station, entry_date=day)
+            if not entries.exists():
+                raise Http404("No records for this date.")
+            deleted = delete_entries(entries)
+            FuelDelivery.objects.filter(tank__station=station, delivery_date=day).delete()
+        return Response({"entry_date": day.isoformat(), "deleted_entries": deleted})
+
+
+class AdminClearView(APIView):
+    """Delete all of the station's daily records. Users, pumps, tanks, prices and rules are kept."""
+    permission_classes = [IsStationAdmin]
+
+    def post(self, request):
+        if str(request.data.get("confirm", "")).strip().upper() != CLEAR_ALL_PHRASE:
+            raise ValidationError({"confirm": f'Type "{CLEAR_ALL_PHRASE}" to confirm.'})
+        station = request.user.station
+        with transaction.atomic():
+            counts = station_record_counts(station)
+            delete_entries(DailyEntry.objects.select_for_update().filter(station=station))
+            FuelDelivery.objects.filter(tank__station=station).delete()
+        return Response({"deleted": counts})

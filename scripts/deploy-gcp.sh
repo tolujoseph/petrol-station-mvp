@@ -15,11 +15,12 @@ EXTRA_HOSTS="$(echo "$EXTRA_ORIGINS" | sed -E 's#https?://##g')"
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
 SERVICE_URL="https://${SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"
 
-# Reuse secrets from an existing deployment so redeploys don't invalidate sessions or change the demo password.
+# Reuse the secret key from an existing deployment so redeploys don't invalidate sessions.
 existing() { gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
   --format="value(spec.template.spec.containers[0].env.filter(name:$1).extract(value).flatten())" 2>/dev/null || true; }
 SECRET_KEY="$(existing DJANGO_SECRET_KEY)"; SECRET_KEY="${SECRET_KEY:-$(openssl rand -base64 48 | tr -d '\n/+=')}"
-DEMO_PASSWORD_VALUE="$(existing DEMO_PASSWORD)"; DEMO_PASSWORD_VALUE="${DEMO_PASSWORD_VALUE:-$(openssl rand -base64 18 | tr -d '\n/+=')}"
+# Shared password for the omesh-* logins; override with DEMO_PASSWORD.
+DEMO_PASSWORD_VALUE="${DEMO_PASSWORD:-omesh}"
 
 ENV_FILE="$(mktemp)"; trap 'rm -f "$ENV_FILE"' EXIT
 cat > "$ENV_FILE" <<YAML
@@ -43,4 +44,4 @@ gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" --source . 
 echo
 echo "Service:        $SERVICE_URL"
 echo "Django admin:   $SERVICE_URL/admin/"
-echo "Demo logins:    manager / owner / admin   password: $DEMO_PASSWORD_VALUE"
+echo "Logins:         omesh-manager / omesh-owner / omesh-admin   password: $DEMO_PASSWORD_VALUE"

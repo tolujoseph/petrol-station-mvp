@@ -16,16 +16,16 @@ To run the setup step alone: `./setup.sh`.
 - App: http://localhost:5173
 - Django admin: http://localhost:8000/admin/ (the port moves up automatically if 8000 is taken; `dev.sh` prints the real one)
 
-The frontend has no login page yet and uses your Django session, so **sign in at the Django admin first**, then open the app.
+The frontend has its own sign-in screen (Django session login).
 
 ## Demo logins
 
-Created by `python manage.py seed_demo` (also adds product prices, reconciliation settings and 14 days of reconciled history; `--days 0` skips the history) (password `demo12345`, override with `DEMO_PASSWORD`):
+The app is set up for one company, **Omesh**. `python manage.py seed_demo` creates the Omesh station (pumps, pits, prices, checking rules), these logins and the past 2 days of reconciled history (`--days N` for more, `--days 0` for none). `--reset` wipes every station, record and setting first. All logins use the password `omesh` (override with `DEMO_PASSWORD`), locally and on the Cloud Run deployment:
 
 | User | Role |
 |---|---|
-| `manager` | Manager (daily entry form) |
-| `owner` | Owner |
-| `admin` | Manager + Django admin access |
+| `omesh-manager` | Manager (daily entry form) |
+| `omesh-owner` | Owner (dashboard, prices, history) |
+| `omesh-admin` | Owner + can delete days or clear all records, and use the Django admin |
 
-Demo data is for local development only. See `backend/API.md` for the API.
+See `backend/API.md` for the API, including the admin endpoints.

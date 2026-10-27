@@ -34,7 +34,7 @@ cat <<MSG
 
   App:            http://localhost:${FRONTEND_PORT}
   Django admin:   http://localhost:${BACKEND_PORT}/admin/   <- sign in here first (the app uses this session)
-  Demo logins:    manager / owner / admin   password: demo12345
+  Logins:         omesh-manager / omesh-owner / omesh-admin   password: omesh
 
 MSG
 wait

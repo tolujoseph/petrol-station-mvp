@@ -28,3 +28,17 @@ class IsOwner(BasePermission):
             and user.role == User.Role.OWNER
             and user.station_id is not None
         )
+
+
+class IsStationAdmin(BasePermission):
+    """Staff accounts may delete or clear their station's records."""
+    message = "You must be an admin assigned to a station."
+
+    def has_permission(self, request, view):
+        user = request.user
+
+        return (
+            user.is_authenticated
+            and user.is_staff
+            and user.station_id is not None
+        )

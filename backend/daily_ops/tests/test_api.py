@@ -11,6 +11,7 @@ from daily_ops.models import (
     DailyEntry,
     DailyResult,
     FinancialTransaction,
+    FuelDelivery,
     Pump,
     PumpReading,
     PumpReadingEvidence,
@@ -1008,3 +1009,83 @@ class AdditionalSecurityTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(DailyEntry.objects.count(), 0)
+
+
+class AdminRecordTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.station = Station.objects.create(name="Omesh")
+        self.other_station = Station.objects.create(name="Elsewhere")
+        self.admin = User.objects.create_user(
+            username="omesh-admin", password="test-password-123",
+            station=self.station, role=User.Role.OWNER, is_staff=True,
+        )
+        self.owner = User.objects.create_user(
+            username="omesh-owner", password="test-password-123",
+            station=self.station, role=User.Role.OWNER,
+        )
+        self.tank = Tank.objects.create(station=self.station, label="Pit 1", product_type="PMS")
+        self.entries = [
+            self.create_entry(self.station, "2026-10-08"),
+            self.create_entry(self.station, "2026-10-08"),  # superseded version of the same day
+            self.create_entry(self.station, "2026-10-09"),
+        ]
+        self.other_entry = self.create_entry(self.other_station, "2026-10-08")
+        FuelDelivery.objects.create(tank=self.tank, delivery_date="2026-10-08", quantity="1000.00")
+
+    def create_entry(self, station, entry_date):
+        entry = DailyEntry.objects.create(
+            station=station, manager=self.admin, entry_date=entry_date,
+            status=DailyEntry.Status.SUBMITTED, submitted_at=timezone.now(),
+        )
+        DailyResult.objects.create(daily_entry=entry)
+        FinancialTransaction.objects.create(daily_entry=entry, product_type="PMS", transaction_type="POS", amount="100.00")
+        return entry
+
+    def test_me_reports_admin_flag(self):
+        self.client.force_authenticate(user=self.admin)
+        self.assertTrue(self.client.get("/api/auth/me/").data["is_admin"])
+        self.client.force_authenticate(user=self.owner)
+        self.assertFalse(self.client.get("/api/auth/me/").data["is_admin"])
+
+    def test_non_admins_cannot_delete_or_clear(self):
+        self.client.force_authenticate(user=self.owner)
+        self.assertEqual(self.client.get("/api/admin/summary/").status_code, 403)
+        self.assertEqual(self.client.delete("/api/admin/days/2026-10-08/").status_code, 403)
+        self.assertEqual(self.client.post("/api/admin/clear/", {"confirm": "DELETE ALL"}, format="json").status_code, 403)
+        self.assertEqual(DailyEntry.objects.count(), 4)
+
+    def test_delete_day_removes_every_version_of_that_date_only(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.delete("/api/admin/days/2026-10-08/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["deleted_entries"], 2)
+        self.assertEqual(
+            sorted(DailyEntry.objects.values_list("id", flat=True)),
+            sorted([self.entries[2].id, self.other_entry.id]),
+        )
+        self.assertFalse(FuelDelivery.objects.exists())
+        self.assertEqual(self.client.delete("/api/admin/days/2026-10-08/").status_code, 404)
+        self.assertEqual(self.client.delete("/api/admin/days/not-a-date/").status_code, 400)
+
+    def test_clear_requires_typed_phrase_and_keeps_other_stations(self):
+        self.client.force_authenticate(user=self.admin)
+
+        refused = self.client.post("/api/admin/clear/", {"confirm": "yes"}, format="json")
+        self.assertEqual(refused.status_code, 400)
+        self.assertEqual(DailyEntry.objects.filter(station=self.station).count(), 3)
+
+        summary = self.client.get("/api/admin/summary/").data
+        self.assertEqual(summary["entries"], 3)
+        self.assertEqual(summary["clear_all_phrase"], "DELETE ALL")
+
+        cleared = self.client.post("/api/admin/clear/", {"confirm": "delete all"}, format="json")
+        self.assertEqual(cleared.status_code, 200)
+        self.assertEqual(cleared.data["deleted"]["entries"], 3)
+        self.assertFalse(DailyEntry.objects.filter(station=self.station).exists())
+        self.assertFalse(FinancialTransaction.objects.filter(daily_entry__station=self.station).exists())
+        self.assertTrue(DailyEntry.objects.filter(id=self.other_entry.id).exists())
+        self.assertTrue(Tank.objects.filter(id=self.tank.id).exists())
+        self.assertTrue(User.objects.filter(id=self.owner.id).exists())

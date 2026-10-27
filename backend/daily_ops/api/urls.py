@@ -2,6 +2,9 @@
 from django.urls import path
 
 from .views import (
+    AdminClearView,
+    AdminDayDeleteView,
+    AdminSummaryView,
     CsrfTokenView,
     CurrentUserView,
     DailyEntryCreateView,
@@ -81,6 +84,23 @@ urlpatterns = [
         "evidence/<str:evidence_type>/<int:evidence_id>/image/",
         EvidenceImageView.as_view(),
         name="evidence-image",
+    ),
+
+    # Admin: delete a day or clear all records
+    path(
+        "admin/summary/",
+        AdminSummaryView.as_view(),
+        name="admin-summary",
+    ),
+    path(
+        "admin/days/<str:entry_date>/",
+        AdminDayDeleteView.as_view(),
+        name="admin-day-delete",
+    ),
+    path(
+        "admin/clear/",
+        AdminClearView.as_view(),
+        name="admin-clear",
     ),
 
     # Reports

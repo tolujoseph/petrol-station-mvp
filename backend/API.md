@@ -251,6 +251,14 @@ Returns a JSON array containing discrepancy records for the Owner's station only
 
 A physical discrepancy exists when the pump volume differs from the tank movement. A financial discrepancy exists when expected revenue differs from recorded sales.
 
+### Admin endpoints
+
+**Access:** staff accounts (`is_staff`, e.g. `omesh-admin`) assigned to a station. `GET /auth/me/` returns `is_admin`.
+
+- `GET /admin/summary/`: counts of the station's records (`submitted_days`, `entries`, `drafts`, `transactions`, `photos`, `deliveries`) and the `clear_all_phrase`.
+- `DELETE /admin/days/{YYYY-MM-DD}/`: deletes every entry for that date (the official one, superseded versions and drafts, with readings, money lines, results and photos) plus that day's fuel deliveries. `404` if there is nothing for the date.
+- `POST /admin/clear/` with `{"confirm": "DELETE ALL"}`: deletes all of the station's daily records and deliveries. Users, pumps, tanks, prices and checking rules are kept. Any other `confirm` value returns `400`.
+
 ## 4. Business rules
 
 ### Pump volume

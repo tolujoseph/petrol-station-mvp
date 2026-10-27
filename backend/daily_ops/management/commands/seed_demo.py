@@ -1,7 +1,7 @@
-"""Create local demo data so the frontend works on a fresh database.
+"""Set up the Omesh station with its logins, prices and a couple of days of history.
 
-Safe to re-run: existing records are reused and demo passwords are reset.
-For local development only.
+Safe to re-run: existing records are reused and the login passwords are reset.
+`--reset` first wipes every station, record and the old demo logins.
 """
 
 import os
@@ -16,16 +16,19 @@ from django.test import Client
 from daily_ops.models import (
     DailyEntry,
     DailyResult,
+    FuelDelivery,
     Pump,
     ProductSettings,
+    PumpReadingEvidence,
     ReconciliationSettings,
     Station,
     Tank,
+    TankReadingEvidence,
     User,
 )
 
-DEMO_STATION = "Javeln Ikeja Forecourt"
-DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "demo12345")
+DEMO_STATION = "Omesh"
+DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "omesh")
 
 # Mirrors the station's spreadsheet: four petrol pumps, one diesel pump, two petrol pits and a diesel pit.
 PUMPS = [("Pump 1", "PMS", "251613.93"), ("Pump 2", "PMS", "734049.99"), ("Pump 3", "PMS", "468141.93"), ("Pump 4", "PMS", "731284.90"), ("Pump 5", "AGO", "500459.63")]
@@ -33,23 +36,26 @@ TANKS = [("Pit 1", "PMS", "6000"), ("Pit 2", "PMS", "13500"), ("Pit 3", "AGO", "
 # Selling price and landing cost per litre, from late May in the spreadsheet.
 PRICES = {"PMS": ("880.00", "840.50"), "AGO": ("990.00", "971.00")}
 USERS = [
-    # username, role, is_superuser
-    ("manager", User.Role.MANAGER, False),
-    ("owner", User.Role.OWNER, False),
-    ("admin", User.Role.MANAGER, True),
+    # username, role, is_admin (may delete records and use the Django admin)
+    ("omesh-admin", User.Role.OWNER, True),
+    ("omesh-owner", User.Role.OWNER, False),
+    ("omesh-manager", User.Role.MANAGER, False),
 ]
+# Logins from earlier versions of this command, removed by --reset.
+OLD_USERNAMES = ["manager", "owner", "admin"]
 
 
 class Command(BaseCommand):
     help = "Seed a demo station, pumps, tanks, settings, login users and recent history for local development."
 
     def add_arguments(self, parser):
-        parser.add_argument("--days", type=int, default=14, help="Days of submitted history to create (0 to skip).")
+        parser.add_argument("--days", type=int, default=2, help="Days of submitted history to create (0 to skip).")
+        parser.add_argument("--reset", action="store_true", help="Wipe all stations, records, settings and old demo logins first.")
 
     def handle(self, *args, **options):
-        station, _ = Station.objects.get_or_create(
-            name=DEMO_STATION, defaults={"location": "Ikeja, Lagos"}
-        )
+        if options["reset"]:
+            self.reset()
+        station, _ = Station.objects.get_or_create(name=DEMO_STATION)
         # Only lay out equipment on a new station, so re-running never adds pumps to an existing one.
         if not station.pumps.exists():
             for label, product, _ in PUMPS:
@@ -61,8 +67,8 @@ class Command(BaseCommand):
             user, _ = User.objects.get_or_create(username=username)
             user.station = station
             user.role = role
-            user.is_staff = superuser or user.is_staff
-            user.is_superuser = superuser or user.is_superuser
+            user.is_staff = superuser
+            user.is_superuser = superuser
             user.set_password(DEMO_PASSWORD)
             user.save()
 
@@ -71,7 +77,19 @@ class Command(BaseCommand):
             self.seed_history(station, options["days"])
 
         self.stdout.write(self.style.SUCCESS(f"Demo data ready for '{station.name}'."))
-        self.stdout.write(f"Logins (password: {DEMO_PASSWORD}): manager, owner, admin (Django admin access)")
+        self.stdout.write(f"Logins (password: {DEMO_PASSWORD}): omesh-manager, omesh-owner, omesh-admin (can delete records)")
+
+    @transaction.atomic
+    def reset(self):
+        for evidence in [*PumpReadingEvidence.objects.all(), *TankReadingEvidence.objects.all()]:
+            evidence.image.delete(save=False)
+        # Entries first: readings protect the pumps and tanks they belong to.
+        DailyEntry.objects.all().delete()
+        for model in (FuelDelivery, ProductSettings, ReconciliationSettings, Pump, Tank):
+            model.objects.all().delete()
+        User.objects.filter(username__in=OLD_USERNAMES).delete()
+        Station.objects.all().delete()
+        self.stdout.write("Wiped all stations, records and settings.")
 
     def seed_settings(self, station):
         start = date.today() - timedelta(days=365)
@@ -89,13 +107,13 @@ class Command(BaseCommand):
     @transaction.atomic
     def seed_history(self, station, days):
         """Submit past daily entries through the real API so results are genuinely reconciled."""
-        if DailyResult.objects.filter(daily_entry__station=station).exists():
+        if DailyEntry.objects.filter(station=station).exists():
             self.stdout.write("History already present, skipping.")
             return
 
         rng = random.Random(42)
         client = Client()
-        client.force_login(User.objects.get(username="manager"))
+        client.force_login(User.objects.get(username="omesh-manager"))
         host = {"HTTP_HOST": "localhost"}
         pumps = list(Pump.objects.filter(station=station, active=True).order_by("id"))
         tanks = list(Tank.objects.filter(station=station, active=True).order_by("id"))
@@ -105,7 +123,7 @@ class Command(BaseCommand):
         adjustment = Decimal("1") + Decimal("0.85") / Decimal("20")
         cent = Decimal("0.01")
 
-        def submit(entry_date, deliveries, transactions):
+        def submit(entry_date, deliveries, transactions, opening=False):
             payload = {
                 "entry_date": entry_date.isoformat(),
                 "notes": "",
@@ -123,6 +141,9 @@ class Command(BaseCommand):
             done = client.post(f"/api/daily-entries/{entry_id}/finalise/", **host)
             if done.status_code != 200:
                 raise RuntimeError(f"Could not finalise demo entry for {entry_date}: {done.content.decode()}")
+            if opening:
+                # Opening readings are only the baseline for the first day, not a trading day of their own.
+                DailyResult.objects.filter(daily_entry_id=entry_id).delete()
 
         def money(product, amount):
             """Split a fuel's takings across POS, cash/bank and an occasional expense, like the spreadsheet."""
@@ -136,9 +157,9 @@ class Command(BaseCommand):
                 rows.append({"product_type": product, "transaction_type": "expense", "amount": f"{expense:.2f}", "description": "Generator diesel"})
             return rows
 
-        # Day zero establishes the baseline readings.
+        # Opening readings the day before the history starts.
         start = date.today() - timedelta(days=days + 1)
-        submit(start, {}, [])
+        submit(start, {}, [], opening=True)
 
         for offset in range(days):
             entry_date = start + timedelta(days=offset + 1)
