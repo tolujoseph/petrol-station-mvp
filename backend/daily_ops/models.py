@@ -141,6 +141,8 @@ class TankReading(models.Model):
         Tank, on_delete=models.PROTECT, related_name="readings"
     )
     closing_reading = models.DecimalField(max_digits=12, decimal_places=2)
+    # Litres delivered into the tank on the entry date, entered by the manager with the dip.
+    delivered_quantity = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     class Meta:
         constraints = [
@@ -259,6 +261,10 @@ class ReconciliationSettings(models.Model):
     physical_tolerance = models.DecimalField(
         max_digits=12, decimal_places=4, default=5.00
     )
+    # Naira a product's recorded money may differ from its pump sales before the day is flagged.
+    financial_tolerance = models.DecimalField(
+        max_digits=12, decimal_places=2, default=1000
+    )
     # Kept separate from physical reconciliation. Its validation semantics
     # are intentionally not applied until the business rule is confirmed.
     adjustment_tolerance = models.DecimalField(
@@ -294,6 +300,9 @@ class DailyResult(models.Model):
     financial_difference = models.DecimalField(
         max_digits=14, decimal_places=2, default=0
     )
+    financial_within_tolerance = models.BooleanField(null=True, blank=True)
+    # Per-product (PMS / AGO) breakdown of the figures above, as decimal strings.
+    product_results = models.JSONField(default=list, blank=True)
     fuel_cost = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     gross_profit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     expenses = models.DecimalField(max_digits=14, decimal_places=2, default=0)

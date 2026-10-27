@@ -133,87 +133,34 @@ class OrchestrationTests(TestCase):
 
         simulation = simulate_daily_entry(daily_entry)
 
-        # Pump volume:
-        # 1100 - 1000 = 100
-        self.assertEqual(
-            simulation["pump_volume"],
-            Decimal("100"),
-        )
+        # Pump volume: 1100 - 1000 = 100 litres
+        self.assertEqual(simulation["pump_volume"], Decimal("100"))
 
-        # Tank movement:
-        # 5000 - 4900 = 100
-        self.assertEqual(
-            simulation["tank_movement"],
-            Decimal("100"),
-        )
+        # Tank movement: 5000 - 4900 = 100 litres
+        self.assertEqual(simulation["tank_movement"], Decimal("100"))
 
-        # Physical difference:
-        # 100 - 100 = 0
-        self.assertEqual(
-            simulation["physical_difference"],
-            Decimal("0"),
-        )
+        # Litres the dips account for: 100 + (100 / 20 * 0.85) = 104.25,
+        # so the pumps are 4.25 litres off, inside the 5 litre tolerance.
+        self.assertEqual(simulation["physical_difference"], Decimal("4.25"))
+        self.assertTrue(simulation["physical_within_tolerance"])
 
-        self.assertTrue(
-            simulation["physical_within_tolerance"]
-        )
+        # Sales value comes from the pumps: 100 litres x 1.50 = 150
+        self.assertEqual(simulation["expected_revenue"], Decimal("150"))
 
-        # Expected sales volume:
-        #
-        # 100 + (100 / 20 * 0.85)
-        # = 104.25
-        #
-        # Expected revenue:
-        #
-        # 104.25 * 1.50
-        # = 156.375
-        #
-        # Decimal arithmetic is used, so we expect this exact value.
-        self.assertEqual(
-            simulation["expected_revenue"],
-            Decimal("156.375"),
-        )
+        # Money recorded: 150 + 10 = 160, so 10 more than the pumps sold
+        self.assertEqual(simulation["actual_sales"], Decimal("160"))
+        self.assertEqual(simulation["financial_difference"], Decimal("-10"))
+        self.assertTrue(simulation["financial_within_tolerance"])
 
-        # Actual sales:
-        # 150 + 10 = 160
-        self.assertEqual(
-            simulation["actual_sales"],
-            Decimal("160"),
-        )
+        # Fuel cost: tank litres x landing cost = 100 x 1.00
+        self.assertEqual(simulation["fuel_cost"], Decimal("100"))
 
-        # Financial difference:
-        # 156.375 - 160 = -3.625
-        self.assertEqual(
-            simulation["financial_difference"],
-            Decimal("-3.625"),
-        )
+        # Gross profit: 150 - 100 = 50; no expenses
+        self.assertEqual(simulation["gross_profit"], Decimal("50"))
+        self.assertEqual(simulation["expenses"], Decimal("0"))
+        self.assertEqual(simulation["net_profit"], Decimal("50"))
 
-        # Fuel cost:
-        # 100 * 1.00 = 100
-        self.assertEqual(
-            simulation["fuel_cost"],
-            Decimal("100"),
-        )
-
-        # Gross profit:
-        # 156.375 - 100 = 56.375
-        self.assertEqual(
-            simulation["gross_profit"],
-            Decimal("56.375"),
-        )
-
-        # No expenses in this test
-        self.assertEqual(
-            simulation["expenses"],
-            Decimal("0"),
-        )
-
-        # Net profit:
-        # 56.375 - 0 = 56.375
-        self.assertEqual(
-            simulation["net_profit"],
-            Decimal("56.375"),
-        )
+        self.assertEqual([product["product_type"] for product in simulation["products"]], ["PMS"])
 
     def test_save_daily_result(self):
         """
@@ -289,12 +236,12 @@ class OrchestrationTests(TestCase):
 
         self.assertEqual(
             result.physical_difference,
-            Decimal("0"),
+            Decimal("4.25"),
         )
 
         self.assertEqual(
             result.expected_revenue,
-            Decimal("156.375"),
+            Decimal("150"),
         )
 
         self.assertEqual(
@@ -304,12 +251,12 @@ class OrchestrationTests(TestCase):
 
         self.assertEqual(
             result.gross_profit,
-            Decimal("56.375"),
+            Decimal("50"),
         )
 
         self.assertEqual(
             result.net_profit,
-            Decimal("56.375"),
+            Decimal("50"),
         )
 
     def test_save_daily_result_updates_existing_result(self):
@@ -403,3 +350,64 @@ class OrchestrationTests(TestCase):
             ).count(),
             1,
         )
+
+    def test_products_reconcile_separately(self):
+        """A PMS shortage must not be hidden by an AGO surplus on the same day."""
+        ago_pump = Pump.objects.create(station=self.station, label="AGO Pump", product_type=Pump.ProductType.AGO)
+        ago_tank = Tank.objects.create(station=self.station, label="AGO Tank", product_type=Tank.ProductType.AGO)
+        ProductSettings.objects.create(
+            station=self.station,
+            product_type=ProductSettings.ProductType.AGO,
+            selling_price=Decimal("2.00"),
+            landing_cost=Decimal("1.50"),
+            effective_from=date(2026, 10, 1),
+        )
+        previous_entry = DailyEntry.objects.create(
+            station=self.station,
+            manager=self.manager,
+            entry_date=date(2026, 10, 1),
+            status=DailyEntry.Status.SUBMITTED,
+            submitted_at=timezone.now(),
+        )
+        for pump, value in [(self.pump, "1000"), (ago_pump, "500")]:
+            PumpReading.objects.create(daily_entry=previous_entry, pump=pump, closing_reading=Decimal(value))
+        for tank, value in [(self.tank, "5000"), (ago_tank, "3000")]:
+            TankReading.objects.create(daily_entry=previous_entry, tank=tank, closing_reading=Decimal(value))
+
+        daily_entry = DailyEntry.objects.create(
+            station=self.station,
+            manager=self.manager,
+            entry_date=date(2026, 10, 2),
+        )
+        for pump, value in [(self.pump, "1100"), (ago_pump, "550")]:
+            PumpReading.objects.create(daily_entry=daily_entry, pump=pump, closing_reading=Decimal(value))
+        for tank, value in [(self.tank, "4904.08"), (ago_tank, "2952.04")]:
+            TankReading.objects.create(daily_entry=daily_entry, tank=tank, closing_reading=Decimal(value))
+        # PMS sold 150 but only 140 was recorded; AGO sold 100 but 110 was recorded.
+        for product, amount in [("PMS", "140"), ("AGO", "110")]:
+            FinancialTransaction.objects.create(
+                daily_entry=daily_entry,
+                product_type=product,
+                transaction_type=FinancialTransaction.TransactionType.POS,
+                amount=Decimal(amount),
+            )
+        self.reconciliation_settings.financial_tolerance = Decimal("5")
+        self.reconciliation_settings.save()
+
+        simulation = simulate_daily_entry(daily_entry)
+        products = {product["product_type"]: product for product in simulation["products"]}
+
+        self.assertEqual(simulation["financial_difference"], Decimal("0"))
+        self.assertEqual(products["PMS"]["financial_difference"], Decimal("10"))
+        self.assertEqual(products["AGO"]["financial_difference"], Decimal("-10"))
+        self.assertFalse(simulation["financial_within_tolerance"])
+        self.assertTrue(simulation["physical_within_tolerance"])
+
+        result = save_daily_result(daily_entry, simulation)
+        result.refresh_from_db()
+        self.assertEqual(
+            [(row["product_type"], row["financial_difference"]) for row in result.product_results],
+            [("PMS", "10.00"), ("AGO", "-10.00")],
+        )
+        self.assertFalse(result.financial_within_tolerance)
+

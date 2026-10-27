@@ -16,7 +16,6 @@ from django.test import Client
 from daily_ops.models import (
     DailyEntry,
     DailyResult,
-    FuelDelivery,
     Pump,
     ProductSettings,
     ReconciliationSettings,
@@ -28,8 +27,11 @@ from daily_ops.models import (
 DEMO_STATION = "Javeln Ikeja Forecourt"
 DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "demo12345")
 
-PUMPS = [("Pump 1", "PMS"), ("Pump 2", "PMS"), ("Pump 3", "AGO")]
-TANKS = [("Tank A", "PMS"), ("Tank B", "AGO")]
+# Mirrors the station's spreadsheet: four petrol pumps, one diesel pump, two petrol pits and a diesel pit.
+PUMPS = [("Pump 1", "PMS", "251613.93"), ("Pump 2", "PMS", "734049.99"), ("Pump 3", "PMS", "468141.93"), ("Pump 4", "PMS", "731284.90"), ("Pump 5", "AGO", "500459.63")]
+TANKS = [("Pit 1", "PMS", "6000"), ("Pit 2", "PMS", "13500"), ("Pit 3", "AGO", "9000")]
+# Selling price and landing cost per litre, from late May in the spreadsheet.
+PRICES = {"PMS": ("880.00", "840.50"), "AGO": ("990.00", "971.00")}
 USERS = [
     # username, role, is_superuser
     ("manager", User.Role.MANAGER, False),
@@ -48,10 +50,12 @@ class Command(BaseCommand):
         station, _ = Station.objects.get_or_create(
             name=DEMO_STATION, defaults={"location": "Ikeja, Lagos"}
         )
-        for label, product in PUMPS:
-            Pump.objects.get_or_create(station=station, label=label, defaults={"product_type": product})
-        for label, product in TANKS:
-            Tank.objects.get_or_create(station=station, label=label, defaults={"product_type": product})
+        # Only lay out equipment on a new station, so re-running never adds pumps to an existing one.
+        if not station.pumps.exists():
+            for label, product, _ in PUMPS:
+                Pump.objects.create(station=station, label=label, product_type=product)
+            for label, product, _ in TANKS:
+                Tank.objects.create(station=station, label=label, product_type=product)
 
         for username, role, superuser in USERS:
             user, _ = User.objects.get_or_create(username=username)
@@ -71,12 +75,16 @@ class Command(BaseCommand):
 
     def seed_settings(self, station):
         start = date.today() - timedelta(days=365)
-        for product, price, cost in [("PMS", "617.00", "560.00"), ("AGO", "1100.00", "1020.00")]:
+        for product, (price, cost) in PRICES.items():
             ProductSettings.objects.get_or_create(
                 station=station, product_type=product, effective_from=start,
                 defaults={"selling_price": Decimal(price), "landing_cost": Decimal(cost)},
             )
-        ReconciliationSettings.objects.get_or_create(station=station, effective_from=start)
+        # In the spreadsheet, pump and adjusted tank litres usually differ by up to ~100 L a day.
+        ReconciliationSettings.objects.get_or_create(
+            station=station, effective_from=start,
+            defaults={"physical_tolerance": Decimal("120"), "financial_tolerance": Decimal("1000")},
+        )
 
     @transaction.atomic
     def seed_history(self, station, days):
@@ -89,25 +97,23 @@ class Command(BaseCommand):
         client = Client()
         client.force_login(User.objects.get(username="manager"))
         host = {"HTTP_HOST": "localhost"}
-        pumps = list(Pump.objects.filter(station=station, active=True))
-        tanks = list(Tank.objects.filter(station=station, active=True))
-        pump_totals = {p.id: Decimal(150000 + 40000 * i) for i, p in enumerate(pumps)}
-        tank_levels = {t.id: Decimal(34000) for t in tanks}
-        price = {"PMS": Decimal("617.00"), "AGO": Decimal("1100.00")}
+        pumps = list(Pump.objects.filter(station=station, active=True).order_by("id"))
+        tanks = list(Tank.objects.filter(station=station, active=True).order_by("id"))
+        meters = {p.id: Decimal(start) for p, (_, _, start) in zip(pumps, PUMPS)}
+        levels = {t.id: Decimal(start) for t, (_, _, start) in zip(tanks, TANKS)}
+        price = {product: Decimal(selling) for product, (selling, _) in PRICES.items()}
+        adjustment = Decimal("1") + Decimal("0.85") / Decimal("20")
+        cent = Decimal("0.01")
 
-        def submit(entry_date, pump_readings, tank_readings, sales):
-            transactions = []
-            if sales:
-                transactions = [
-                    {"product_type": "PMS", "transaction_type": "POS", "amount": f"{sales * Decimal('0.6'):.2f}", "description": "POS settlement"},
-                    {"product_type": "PMS", "transaction_type": "cash_bank", "amount": f"{sales * Decimal('0.4'):.2f}", "description": "Cash banked"},
-                    {"transaction_type": "expense", "amount": "12500.00", "description": "Generator diesel"},
-                ]
+        def submit(entry_date, deliveries, transactions):
             payload = {
                 "entry_date": entry_date.isoformat(),
                 "notes": "",
-                "pump_readings": [{"pump": k, "closing_reading": f"{v:.2f}"} for k, v in pump_readings.items()],
-                "tank_readings": [{"tank": k, "closing_reading": f"{v:.2f}"} for k, v in tank_readings.items()],
+                "pump_readings": [{"pump": k, "closing_reading": f"{v:.2f}"} for k, v in meters.items()],
+                "tank_readings": [
+                    {"tank": k, "closing_reading": f"{v:.2f}", "delivered_quantity": f"{deliveries.get(k, 0):.2f}"}
+                    for k, v in levels.items()
+                ],
                 "financial_transactions": transactions,
             }
             created = client.post("/api/daily-entries/", payload, content_type="application/json", **host)
@@ -117,28 +123,50 @@ class Command(BaseCommand):
             done = client.post(f"/api/daily-entries/{entry_id}/finalise/", **host)
             if done.status_code != 200:
                 raise RuntimeError(f"Could not finalise demo entry for {entry_date}: {done.content.decode()}")
-            return DailyResult.objects.get(daily_entry_id=entry_id)
+
+        def money(product, amount):
+            """Split a fuel's takings across POS, cash/bank and an occasional expense, like the spreadsheet."""
+            pos = (amount * Decimal("0.72")).quantize(Decimal("1"))
+            expense = Decimal(rng.choice([0, 0, 15000, 25000])) if product == "PMS" else Decimal(0)
+            rows = [
+                {"product_type": product, "transaction_type": "POS", "amount": f"{pos:.2f}", "description": "POS settlement"},
+                {"product_type": product, "transaction_type": "cash_bank", "amount": f"{amount - pos - expense:.2f}", "description": "Cash banked"},
+            ]
+            if expense:
+                rows.append({"product_type": product, "transaction_type": "expense", "amount": f"{expense:.2f}", "description": "Generator diesel"})
+            return rows
 
         # Day zero establishes the baseline readings.
         start = date.today() - timedelta(days=days + 1)
-        submit(start, pump_totals, tank_levels, None)
+        submit(start, {}, [])
 
         for offset in range(days):
             entry_date = start + timedelta(days=offset + 1)
-            volumes = {p.id: Decimal(rng.randint(900, 1900)) for p in pumps}
+            sold = {"PMS": Decimal(0), "AGO": Decimal(0)}
             for p in pumps:
-                pump_totals[p.id] += volumes[p.id]
-            for t in tanks:
-                drawn = sum(volumes[p.id] for p in pumps if p.product_type == t.product_type)
-                restock = Decimal(0)
-                if tank_levels[t.id] - drawn < 8000:  # keep tanks topped up
-                    restock = Decimal(30000)
-                    FuelDelivery.objects.create(tank=t, delivery_date=entry_date, quantity=restock)
-                tank_levels[t.id] = tank_levels[t.id] - drawn + restock
-            variance_day = offset % 5 == 3
-            # First pass learns the expected revenue; the second becomes the official entry.
-            probe = submit(entry_date, pump_totals, tank_levels, None)
-            sales = probe.expected_revenue * (Decimal("0.97") if variance_day else Decimal(1))
-            submit(entry_date, pump_totals, tank_levels, sales.quantize(Decimal("0.01")))
+                litres = Decimal(rng.randint(500, 950) if p.product_type == "PMS" else rng.randint(150, 900)) + Decimal(rng.randint(0, 99)) / 100
+                meters[p.id] += litres
+                sold[p.product_type] += litres
+
+            deliveries = {}
+            for product in sold:
+                # Tank dips account for pump litres once the spreadsheet adjustment is applied, give or take a little.
+                used = (sold[product] / adjustment + rng.randint(-40, 40)).quantize(cent)
+                product_tanks = [t for t in tanks if t.product_type == product]
+                for t in product_tanks:
+                    share = (used / len(product_tanks)).quantize(cent)
+                    if levels[t.id] - share < 2000:
+                        deliveries[t.id] = Decimal(15000 if product == "PMS" else 10000)
+                    levels[t.id] += deliveries.get(t.id, 0) - share
+
+            takings = {product: (sold[product] * price[product]).quantize(Decimal("1")) for product in sold}
+            if offset % 7 == 3:
+                takings["PMS"] -= Decimal(25000)  # a short day
+            transactions = money("PMS", takings["PMS"]) + money("AGO", takings["AGO"])
+            if offset % 9 == 5:
+                # A transfer for petrol recorded under diesel: PMS short, AGO over by the same amount.
+                transactions[0]["amount"] = f"{Decimal(transactions[0]['amount']) - 300000:.2f}"
+                transactions.append({"product_type": "AGO", "transaction_type": "transfer", "amount": "300000.00", "description": "Customer transfer"})
+            submit(entry_date, deliveries, transactions)
 
         self.stdout.write(f"Created {days} days of submitted history.")

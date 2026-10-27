@@ -85,10 +85,30 @@ class StationEquipmentView(APIView):
 
         pumps = Pump.objects.filter(station=station, active=True)
         tanks = Tank.objects.filter(station=station, active=True)
+        official_ids = official_daily_entry_ids(station)
+
+        # The latest official closing reading per pump/tank, so the form can show
+        # yesterday's figure and catch typing mistakes before submitting.
+        def last_readings(model, field):
+            latest = {}
+            rows = model.objects.filter(
+                daily_entry_id__in=official_ids,
+            ).select_related("daily_entry").order_by(
+                "-daily_entry__entry_date", "-daily_entry__submitted_at", "-daily_entry_id",
+            )
+            for row in rows:
+                latest.setdefault(getattr(row, field), {
+                    "entry_date": row.daily_entry.entry_date.isoformat(),
+                    "closing_reading": str(row.closing_reading),
+                })
+            return latest
+
+        pump_last = last_readings(PumpReading, "pump_id")
+        tank_last = last_readings(TankReading, "tank_id")
 
         return Response({
-            "pumps": PumpSerializer(pumps, many=True).data,
-            "tanks": TankSerializer(tanks, many=True).data,
+            "pumps": [{**item, "last_reading": pump_last.get(item["id"])} for item in PumpSerializer(pumps, many=True).data],
+            "tanks": [{**item, "last_reading": tank_last.get(item["id"])} for item in TankSerializer(tanks, many=True).data],
         })
 
 
@@ -265,6 +285,7 @@ class DailyEntryCreateView(APIView):
                         daily_entry=entry,
                         tank=item["tank"],
                         closing_reading=item["closing_reading"],
+                        delivered_quantity=item.get("delivered_quantity", 0),
                     )
                     tank_reading_ids.append(reading.id)
 
@@ -370,6 +391,7 @@ class DailyEntryDetailView(APIView):
                     "label": reading.tank.label,
                     "product_type": reading.tank.product_type,
                     "closing_reading": str(reading.closing_reading),
+                    "delivered_quantity": str(reading.delivered_quantity),
                     "evidence_count": reading.evidence_photos.count(),
                 }
                 for reading in entry.tank_readings.select_related("tank").order_by("id")
@@ -449,7 +471,8 @@ class DailyEntryDetailView(APIView):
                     row = existing.get(tank_id)
                     if row:
                         row.closing_reading = item["closing_reading"]
-                        row.save(update_fields=["closing_reading"])
+                        row.delivered_quantity = item.get("delivered_quantity", 0)
+                        row.save(update_fields=["closing_reading", "delivered_quantity"])
                     else:
                         TankReading.objects.create(daily_entry=entry, **item)
 

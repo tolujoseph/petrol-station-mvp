@@ -33,10 +33,13 @@ class TankReadingInputSerializer(serializers.ModelSerializer):
     closing_reading = serializers.DecimalField(
         max_digits=12, decimal_places=2, min_value=0
     )
+    delivered_quantity = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=0, required=False
+    )
 
     class Meta:
         model = TankReading
-        fields = ["tank", "closing_reading"]
+        fields = ["tank", "closing_reading", "delivered_quantity"]
 
 
 class FinancialTransactionInputSerializer(serializers.ModelSerializer):
@@ -52,6 +55,12 @@ class FinancialTransactionInputSerializer(serializers.ModelSerializer):
             "amount",
             "description",
         ]
+
+    def validate(self, attrs):
+        # Every money line, expenses included, belongs to PMS or AGO so each product reconciles on its own.
+        if not attrs.get("product_type"):
+            raise serializers.ValidationError({"product_type": "Choose PMS or AGO for each transaction."})
+        return attrs
 
 
 class DailyEntrySerializer(serializers.ModelSerializer):
@@ -174,6 +183,8 @@ class DailyResultSerializer(serializers.ModelSerializer):
             "expected_revenue",
             "actual_sales",
             "financial_difference",
+            "financial_within_tolerance",
+            "product_results",
             "fuel_cost",
             "gross_profit",
             "expenses",
@@ -206,7 +217,7 @@ class ReconciliationSettingsSerializer(serializers.ModelSerializer):
         model = ReconciliationSettings
         fields = [
             "id", "adjustment_divisor", "adjustment_factor",
-            "physical_tolerance", "adjustment_tolerance", "effective_from",
+            "physical_tolerance", "financial_tolerance", "adjustment_tolerance", "effective_from",
         ]
         read_only_fields = ["id"]
 
@@ -223,6 +234,11 @@ class ReconciliationSettingsSerializer(serializers.ModelSerializer):
     def validate_physical_tolerance(self, value):
         if value < 0:
             raise serializers.ValidationError("Physical tolerance cannot be negative.")
+        return value
+
+    def validate_financial_tolerance(self, value):
+        if value < 0:
+            raise serializers.ValidationError("Money tolerance cannot be negative.")
         return value
 
     def validate_adjustment_tolerance(self, value):

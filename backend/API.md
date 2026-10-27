@@ -71,13 +71,14 @@ Example request:
 {
   "adjustment_divisor": "20",
   "adjustment_factor": "0.85",
-  "physical_tolerance": "5.00",
+  "physical_tolerance": "120.00",
+  "financial_tolerance": "1000.00",
   "adjustment_tolerance": "0.05",
   "effective_from": "2026-11-01"
 }
 ```
 
-`physical_tolerance` controls physical pump-versus-tank reconciliation. `adjustment_tolerance` is stored separately; its validation semantics are not applied until the business rule is confirmed. The API does not allow editing or deleting an existing settings version.
+`physical_tolerance` (litres) and `financial_tolerance` (naira) are applied per product: how far pump litres may be from the adjusted tank litres, and how far recorded money may be from pump sales, before a day is flagged. `adjustment_tolerance` is stored separately; its validation semantics are not applied until the business rule is confirmed. The API does not allow editing or deleting an existing settings version.
 
 ### GET `/daily-entries/`
 
@@ -105,7 +106,8 @@ Example request:
   "tank_readings": [
     {
       "tank": 1,
-      "closing_reading": "4900.00"
+      "closing_reading": "4900.00",
+      "delivered_quantity": "0.00"
     }
   ],
   "financial_transactions": [
@@ -132,6 +134,10 @@ Example request:
 ```
 
 The IDs shown for the pump and tank are examples; use IDs returned by your backend for the authenticated user's station.
+
+Tank `closing_reading` is the litres in the tank (from the dip chart). `delivered_quantity` is optional: litres delivered into that tank on the entry date. Every financial transaction, expenses included, must name its `product_type` (`PMS` or `AGO`).
+
+`GET /station/equipment/` returns each pump and tank with `last_reading` (`entry_date`, `closing_reading`) from the latest official submission, or `null`, so clients can show the previous figure and the litres moved while the manager types.
 
 #### Draft lifecycle endpoints
 
@@ -253,20 +259,21 @@ Pump volume is calculated from the current closing meter reading minus the previ
 
 ### Tank movement
 
-Tank movement is calculated using the previous tank closing reading, recorded deliveries and the current closing reading.
+Tank movement = previous closing litres + litres delivered (the reading's `delivered_quantity` plus any `FuelDelivery` records for the date) − current closing litres.
 
-### Expected revenue
+### Per-product reconciliation
 
-Adjustment = (tank movement / adjustment divisor) × adjustment factor. Expected sales volume = tank movement + adjustment. Expected revenue = expected sales volume × applicable selling price. This adjustment affects expected sales volume and revenue only; it never changes raw pump readings or tank movement. The spreadsheet-derived divisor (20) and factor (0.85) are preserved as settings. The adjustment tolerance (±0.05) is stored separately from the configurable physical tolerance and is not used as a validation rule until its meaning is confirmed.
+These rules follow the station's spreadsheet and are applied to PMS and AGO separately; a day's totals are the sum of the products. Each result carries a `product_results` list with the per-product figures.
 
-### Actual sales
-
-Actual sales include POS, cash/bank and credit transactions. Expenses are excluded.
+- **Physical check:** expected litres = tank movement + (tank movement / adjustment divisor) × adjustment factor. Pump volume is compared with expected litres; within `physical_tolerance` litres is accepted. The divisor (20) and factor (0.85) come from the spreadsheet. The adjustment tolerance (±0.05) is stored but not yet used.
+- **Sales value** (`expected_revenue`) = pump volume × selling price.
+- **Money recorded** (`actual_sales`) = every transaction for the product: POS, cash/bank, credit, transfer, shell deposit and expenses paid from the takings.
+- **Financial difference** = sales value − money recorded (positive means short); within `financial_tolerance` naira is accepted.
 
 ### Profit
 
 - Fuel cost = tank movement × applicable landing cost.
-- Gross profit = expected revenue − fuel cost.
+- Gross profit = sales value − fuel cost.
 - Net profit = gross profit − expenses.
 
 ### Historical settings

@@ -65,19 +65,25 @@ def calculate_tank_movement(reading: TankReading) -> Decimal:
         Decimal("0.00"),
     )
 
-    return opening_stock + total_deliveries - reading.closing_reading
+    return (
+        opening_stock
+        + total_deliveries
+        + reading.delivered_quantity
+        - reading.closing_reading
+    )
 
 
 def reconcile_physical_volume(
     pump_volume: Decimal,
-    tank_movement: Decimal,
+    expected_volume: Decimal,
     tolerance: Decimal,
 ) -> dict:
-    difference = abs(pump_volume - tank_movement)
+    """Compare litres sold at the pumps with the litres the tank dips account for."""
+    difference = abs(pump_volume - expected_volume)
 
     return {
         "pump_volume": pump_volume,
-        "tank_movement": tank_movement,
+        "expected_volume": expected_volume,
         "difference": difference,
         "within_tolerance": difference <= tolerance,
     }
@@ -98,11 +104,12 @@ def calculate_expected_sales_volume(
     return tank_movement + adjustment
 
 
-def calculate_expected_revenue(
-    expected_sales_volume: Decimal,
+def calculate_sales_value(
+    pump_volume: Decimal,
     selling_price: Decimal,
 ) -> Decimal:
-    return expected_sales_volume * selling_price
+    """Money the pumps say should have come in: litres sold x selling price."""
+    return pump_volume * selling_price
 
 
 def get_product_settings(
@@ -135,33 +142,40 @@ def get_reconciliation_settings(
     )
 
 
-def calculate_actual_sales(transactions) -> Decimal:
-    sales_transaction_types = {
-        FinancialTransaction.TransactionType.POS,
-        FinancialTransaction.TransactionType.CASH_BANK,
-        FinancialTransaction.TransactionType.CREDIT,
-    }
+def calculate_money_accounted(transactions) -> Decimal:
+    """
+    All money recorded against the day's sales.
 
+    As in the station's spreadsheet, every line counts: POS, cash/bank,
+    credit, transfers, shell deposits, and expenses paid out of the takings.
+    """
+    return sum((item.amount for item in transactions), Decimal("0.00"))
+
+
+def calculate_expenses(transactions) -> Decimal:
     return sum(
         (
             item.amount
             for item in transactions
-            if item.transaction_type in sales_transaction_types
+            if item.transaction_type == FinancialTransaction.TransactionType.EXPENSE
         ),
         Decimal("0.00"),
     )
 
 
 def reconcile_financial_sales(
-    expected_revenue: Decimal,
-    actual_sales: Decimal,
+    sales_value: Decimal,
+    money_accounted: Decimal,
+    tolerance: Decimal,
 ) -> dict:
-    difference = expected_revenue - actual_sales
+    """Positive difference means money is short of what the pumps sold."""
+    difference = sales_value - money_accounted
 
     return {
-        "expected_revenue": expected_revenue,
-        "actual_sales": actual_sales,
+        "sales_value": sales_value,
+        "money_accounted": money_accounted,
         "difference": difference,
+        "within_tolerance": abs(difference) <= tolerance,
     }
 
 
@@ -173,10 +187,10 @@ def calculate_fuel_cost(
 
 
 def calculate_gross_profit(
-    expected_revenue: Decimal,
+    sales_value: Decimal,
     fuel_cost: Decimal,
 ) -> Decimal:
-    return expected_revenue - fuel_cost
+    return sales_value - fuel_cost
 
 
 def calculate_net_profit(

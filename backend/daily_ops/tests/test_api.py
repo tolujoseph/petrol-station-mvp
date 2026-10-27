@@ -14,6 +14,7 @@ from daily_ops.models import (
     Pump,
     PumpReading,
     PumpReadingEvidence,
+    ProductSettings,
     ReconciliationSettings,
     Station,
     Tank,
@@ -144,6 +145,13 @@ class DailyEntryTransactionTests(TestCase):
             physical_tolerance="5",
             effective_from="2026-01-01",
         )
+        ProductSettings.objects.create(
+            station=self.station,
+            product_type="PMS",
+            selling_price="890.00",
+            landing_cost="860.00",
+            effective_from="2026-01-01",
+        )
 
     def test_failed_submission_rolls_back_all_records(self):
         payload = {
@@ -217,6 +225,38 @@ class DailyEntryTransactionTests(TestCase):
         self.assertEqual(FinancialTransaction.objects.count(), 1)
         self.assertEqual(DailyResult.objects.count(), 0)
 
+
+    def test_transactions_must_name_a_product(self):
+        payload = {
+            "entry_date": "2026-10-10",
+            "pump_readings": [{"pump": self.pump.id, "closing_reading": "1100.00"}],
+            "tank_readings": [{"tank": self.tank.id, "closing_reading": "4900.00"}],
+            "financial_transactions": [{"transaction_type": "expense", "amount": "500.00"}],
+        }
+
+        response = self.client.post("/api/daily-entries/", payload, format="json")
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_equipment_includes_last_official_reading_and_delivery_round_trips(self):
+        payload = {
+            "entry_date": "2026-10-10",
+            "pump_readings": [{"pump": self.pump.id, "closing_reading": "1100.00"}],
+            "tank_readings": [{"tank": self.tank.id, "closing_reading": "4900.00", "delivered_quantity": "3000.00"}],
+            "financial_transactions": [],
+        }
+        entry_id = self.client.post("/api/daily-entries/", payload, format="json").data["id"]
+
+        detail = self.client.get(f"/api/daily-entries/{entry_id}/")
+        self.assertEqual(detail.data["tank_readings"][0]["delivered_quantity"], "3000.00")
+
+        before = self.client.get("/api/station/equipment/")
+        self.assertIsNone(before.data["pumps"][0]["last_reading"])
+
+        self.client.post(f"/api/daily-entries/{entry_id}/finalise/", {}, format="json")
+        after = self.client.get("/api/station/equipment/")
+        self.assertEqual(after.data["pumps"][0]["last_reading"], {"entry_date": "2026-10-10", "closing_reading": "1100.00"})
+        self.assertEqual(after.data["tanks"][0]["last_reading"]["closing_reading"], "4900.00")
 
     def test_submission_succeeds_without_evidence_photos(self):
         payload = {

@@ -19,13 +19,14 @@ from daily_ops.models import (
     User,
 )
 from daily_ops.services.calculations import (
-    calculate_actual_sales,
-    calculate_expected_revenue,
     calculate_expected_sales_volume,
+    calculate_expenses,
     calculate_fuel_cost,
     calculate_gross_profit,
+    calculate_money_accounted,
     calculate_net_profit,
     calculate_pump_volume,
+    calculate_sales_value,
     calculate_tank_movement,
     get_product_settings,
     get_reconciliation_settings,
@@ -161,10 +162,34 @@ class CalculationTests(TestCase):
 
         self.assertEqual(result, Decimal("5000.00"))
 
+    def test_tank_movement_includes_delivery_entered_with_dip(self):
+        previous_entry = DailyEntry.objects.create(
+            station=self.station,
+            manager=self.manager,
+            entry_date=date(2026, 10, 4),
+            status=DailyEntry.Status.SUBMITTED,
+            submitted_at=timezone.now(),
+        )
+        TankReading.objects.create(daily_entry=previous_entry, tank=self.tank, closing_reading=Decimal("3350.00"))
+        current_entry = DailyEntry.objects.create(
+            station=self.station,
+            manager=self.manager,
+            entry_date=date(2026, 10, 5),
+        )
+        reading = TankReading.objects.create(
+            daily_entry=current_entry,
+            tank=self.tank,
+            closing_reading=Decimal("13100.00"),
+            delivered_quantity=Decimal("10000.00"),
+        )
+
+        # 3350 + 10000 delivered - 13100 left = 250 litres sold
+        self.assertEqual(calculate_tank_movement(reading), Decimal("250.00"))
+
     def test_physical_reconciliation_is_within_tolerance(self):
         result = reconcile_physical_volume(
             pump_volume=Decimal("5000.00"),
-            tank_movement=Decimal("4970.00"),
+            expected_volume=Decimal("4970.00"),
             tolerance=Decimal("50.00"),
         )
 
@@ -174,7 +199,7 @@ class CalculationTests(TestCase):
     def test_physical_reconciliation_exceeds_tolerance(self):
         result = reconcile_physical_volume(
             pump_volume=Decimal("5000.00"),
-            tank_movement=Decimal("4900.00"),
+            expected_volume=Decimal("4900.00"),
             tolerance=Decimal("50.00"),
         )
 
@@ -190,13 +215,13 @@ class CalculationTests(TestCase):
 
         self.assertEqual(result, Decimal("10425.00"))
 
-    def test_calculates_expected_revenue(self):
-        result = calculate_expected_revenue(
-            expected_sales_volume=Decimal("10425.00"),
-            selling_price=Decimal("1.50"),
+    def test_sales_value_uses_pump_litres(self):
+        result = calculate_sales_value(
+            pump_volume=Decimal("2414.30"),
+            selling_price=Decimal("890.00"),
         )
 
-        self.assertEqual(result, Decimal("15637.50"))
+        self.assertEqual(result, Decimal("2148727.00"))
 
     def test_gets_latest_product_settings_for_entry_date(self):
         ProductSettings.objects.create(
@@ -247,7 +272,7 @@ class CalculationTests(TestCase):
         self.assertIsNotNone(settings)
         self.assertEqual(settings.physical_tolerance, Decimal("50.00"))
 
-    def test_calculates_actual_sales_from_sales_transactions(self):
+    def test_money_accounted_counts_every_transaction_type(self):
         entry = DailyEntry.objects.create(
             station=self.station,
             manager=self.manager,
@@ -279,23 +304,44 @@ class CalculationTests(TestCase):
             amount=Decimal("500.00"),
         )
 
-        result = calculate_actual_sales(
-            entry.financial_transactions.all()
+        FinancialTransaction.objects.create(
+            daily_entry=entry,
+            product_type=FinancialTransaction.ProductType.PMS,
+            transaction_type=FinancialTransaction.TransactionType.TRANSFER,
+            amount=Decimal("2000.00"),
+        )
+        FinancialTransaction.objects.create(
+            daily_entry=entry,
+            product_type=FinancialTransaction.ProductType.PMS,
+            transaction_type=FinancialTransaction.TransactionType.SHELL_DEPOSIT,
+            amount=Decimal("300.00"),
         )
 
-        # POS + cash/bank + credit; expenses are excluded.
-        self.assertEqual(result, Decimal("15500.00"))
+        transactions = entry.financial_transactions.all()
+
+        # Like the station spreadsheet, every money line counts towards the day's
+        # takings: POS + cash/bank + credit + expense + transfer + shell deposit.
+        self.assertEqual(calculate_money_accounted(transactions), Decimal("18300.00"))
+        self.assertEqual(calculate_expenses(transactions), Decimal("500.00"))
 
     def test_reconciles_financial_sales(self):
         result = reconcile_financial_sales(
-            expected_revenue=Decimal("15637.50"),
-            actual_sales=Decimal("15500.00"),
+            sales_value=Decimal("2148727.00"),
+            money_accounted=Decimal("2149308.00"),
+            tolerance=Decimal("1000.00"),
         )
 
-        self.assertEqual(
-            result["difference"],
-            Decimal("137.50"),
+        self.assertEqual(result["difference"], Decimal("-581.00"))
+        self.assertTrue(result["within_tolerance"])
+
+        short = reconcile_financial_sales(
+            sales_value=Decimal("2891040.40"),
+            money_accounted=Decimal("2445290.00"),
+            tolerance=Decimal("1000.00"),
         )
+
+        self.assertEqual(short["difference"], Decimal("445750.40"))
+        self.assertFalse(short["within_tolerance"])
 
     def test_calculates_fuel_cost(self):
         result = calculate_fuel_cost(
@@ -307,7 +353,7 @@ class CalculationTests(TestCase):
 
     def test_calculates_gross_profit(self):
         result = calculate_gross_profit(
-            expected_revenue=Decimal("15637.50"),
+            sales_value=Decimal("15637.50"),
             fuel_cost=Decimal("12000.00"),
         )
 
