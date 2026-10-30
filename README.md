@@ -20,7 +20,7 @@ The frontend has its own sign-in screen (Django session login).
 
 ## Demo logins
 
-The app is set up for one company, **Omesh**. `python manage.py seed_demo` creates the Omesh station (pumps, pits, prices, checking rules), these logins and the past 2 days of reconciled history (`--days N` for more, `--days 0` for none). `--reset` wipes every station, record and setting first. All logins use the password `omesh` (override with `DEMO_PASSWORD`), locally and on the Cloud Run deployment:
+The app is set up for one company, **Omesh**. `python manage.py seed_demo` creates the Omesh station (pumps, pits, prices, checking rules), these logins and the past 2 days of reconciled history (`--days N` for more, `--days 0` for none). The Cloud Run deployment starts with no records (`SEED_DEMO_DAYS`, default 0 in `scripts/deploy-gcp.sh`). `--reset` wipes every station, record and setting first. All logins use the password `omesh` (override with `DEMO_PASSWORD`), locally and on the Cloud Run deployment:
 
 | User | Role |
 |---|---|
