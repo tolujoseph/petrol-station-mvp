@@ -29,3 +29,14 @@ The app is set up for one company, **Omesh**. `python manage.py seed_demo` creat
 | `omesh-admin` | Owner + can delete days or clear all records, and use the Django admin |
 
 See `backend/API.md` for the API, including the admin endpoints.
+
+
+## Owner controls and manual backup
+
+The current production frontend is the separate private `boluwatifeajayi/petrol-station-frontend` repository. The `frontend/` folder in this repository is an older copy.
+
+Owners can create financial columns and hide/restore columns, pumps and tanks from their dashboard. New demo stations start with six PMS pumps, two AGO pumps, and the existing three tanks. Hiding preserves old records. History supports a specific date; managers see only their own records. Owners can correct submitted readings, money and notes; the date and original equipment remain fixed, previous values are recorded, and affected later official results are recalculated.
+
+Before each deployment, sign in as `omesh-admin`, open **Admin**, and choose **Download all data**. Keep the ZIP outside the server. It includes CSV tables, structured operational data, settings, edit history, user identifiers (without credentials), and available photos. `manifest.json` lists missing photo files, if any. This is an export, not an automatic restore feature.
+
+Cloud Run still uses ephemeral SQLite/media storage: a restart or deployment can clear live records. Manual exports do not prevent that loss. No persistent database is provisioned by this change.

@@ -29,3 +29,6 @@ dist-ssr/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Private manual backups
+backups/

@@ -3,6 +3,7 @@ from rest_framework import serializers
 
 from ..models import (
     DailyEntry,
+    TransactionColumn,
     DailyResult,
     FinancialTransaction,
     ProductSettings,
@@ -52,6 +53,7 @@ class FinancialTransactionInputSerializer(serializers.ModelSerializer):
         fields = [
             "product_type",
             "transaction_type",
+            "column",
             "amount",
             "description",
         ]
@@ -60,7 +62,22 @@ class FinancialTransactionInputSerializer(serializers.ModelSerializer):
         # Every money line, expenses included, belongs to PMS or AGO so each product reconciles on its own.
         if not attrs.get("product_type"):
             raise serializers.ValidationError({"product_type": "Choose PMS or AGO for each transaction."})
+        column = attrs.get("column")
+        request = self.context.get("request")
+        if column:
+            if not request or column.station_id != request.user.station_id:
+                raise serializers.ValidationError({"column": "Column not found for this station."})
+            entry = self.context.get("entry")
+            if not column.active and not (entry and entry.financial_transactions.filter(column=column).exists()):
+                raise serializers.ValidationError({"column": "This column is hidden. Choose a visible column."})
+            attrs["transaction_type"] = column.transaction_type
         return attrs
+
+
+class TransactionColumnSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TransactionColumn
+        fields = ["id", "label", "transaction_type", "active", "position"]
 
 
 class DailyEntrySerializer(serializers.ModelSerializer):
@@ -175,6 +192,7 @@ class DailyResultSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "station",
+            "daily_entry",
             "entry_date",
             "pump_volume",
             "tank_movement",

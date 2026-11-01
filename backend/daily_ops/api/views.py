@@ -88,6 +88,9 @@ class StationEquipmentView(APIView):
         pumps = Pump.objects.filter(station=station, active=True)
         tanks = Tank.objects.filter(station=station, active=True)
         official_ids = official_daily_entry_ids(station)
+        before = request.query_params.get("before")
+        if before:
+            official_ids = official_ids.filter(entry_date__lt=parse_report_date(before, "before"))
 
         # The latest official closing reading per pump/tank, so the form can show
         # yesterday's figure and catch typing mistakes before submitting.
@@ -203,7 +206,7 @@ class DailyEntryCreateView(APIView):
         }
 
     def post(self, request):
-        serializer = DailyEntrySerializer(data=request.data)
+        serializer = DailyEntrySerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
 
         raw_key = request.headers.get("Idempotency-Key")
@@ -375,6 +378,7 @@ class DailyEntryDetailView(APIView):
             "entry_date": entry.entry_date,
             "status": entry.status,
             "notes": entry.notes,
+            "version": entry.edits.count(),
             "pump_readings": [
                 {
                     "id": reading.id,
@@ -383,6 +387,7 @@ class DailyEntryDetailView(APIView):
                     "product_type": reading.pump.product_type,
                     "closing_reading": str(reading.closing_reading),
                     "evidence_count": reading.evidence_photos.count(),
+                    "evidence_ids": list(reading.evidence_photos.values_list("id", flat=True)),
                 }
                 for reading in entry.pump_readings.select_related("pump").order_by("id")
             ],
@@ -395,6 +400,7 @@ class DailyEntryDetailView(APIView):
                     "closing_reading": str(reading.closing_reading),
                     "delivered_quantity": str(reading.delivered_quantity),
                     "evidence_count": reading.evidence_photos.count(),
+                    "evidence_ids": list(reading.evidence_photos.values_list("id", flat=True)),
                 }
                 for reading in entry.tank_readings.select_related("tank").order_by("id")
             ],
@@ -403,6 +409,8 @@ class DailyEntryDetailView(APIView):
                     "id": item.id,
                     "product_type": item.product_type,
                     "transaction_type": item.transaction_type,
+                    "column": item.column_id,
+                    "column_label": item.column.label if item.column_id else item.get_transaction_type_display(),
                     "amount": str(item.amount),
                     "description": item.description,
                 }
@@ -421,7 +429,7 @@ class DailyEntryDetailView(APIView):
             if entry is None:
                 raise Http404("Editable draft not found.")
 
-            serializer = DailyEntrySerializer(data=request.data, partial=True)
+            serializer = DailyEntrySerializer(data=request.data, partial=True, context={"request": request, "entry": entry})
             serializer.is_valid(raise_exception=True)
             data = serializer.validated_data
 

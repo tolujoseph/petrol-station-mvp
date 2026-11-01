@@ -301,3 +301,18 @@ Product pricing, landing costs and reconciliation settings are selected accordin
 ## 6. Current scope
 
 This API currently supports daily submissions and saved reconciliation reports. It does not yet document endpoints for creating stations, pumps, tanks, deliveries or configuration settings. Those resources are managed separately at this stage.
+
+## Station controls, saved entries and export
+
+- `GET /api/station/columns/`: station financial column definitions, including hidden columns.
+- `POST /api/station/columns/` (owner): `{label, transaction_type}` creates a column. Existing accounting types remain supported.
+- `PATCH /api/station/columns/{id}/` (owner): `{active: false|true}` hides/restores; no delete route.
+- Financial transaction inputs optionally include `column` (ID). Its station and visibility are validated; the server derives the accounting type. Existing entries may retain hidden columns.
+- `GET /api/station/settings/equipment/` (owner): all equipment, including hidden items.
+- `POST /api/station/settings/equipment/` (owner): `{kind: "pump"|"tank", label, product_type}`.
+- `PATCH /api/station/settings/equipment/{kind}/{id}/` (owner): `{active: false|true}`; no delete route.
+- `GET /api/station/equipment/?before=YYYY-MM-DD`: active equipment with the previous official closing readings before that business date.
+- `GET /api/saved-entries/?date=YYYY-MM-DD` or `/api/saved-entries/{id}/`: submitted details; managers are restricted to their own station and own entries.
+- `PATCH /api/saved-entries/{id}/` (owner): partial daily-entry payload plus the `version` returned by GET. Existing equipment and date are retained; corrections preserve evidence and original manager attribution. The previous snapshot and editor are recorded. Later official days are recalculated in the same database transaction. A stale version returns 409.
+- Daily result responses now include `daily_entry` to link a report to its entry.
+- `GET /api/admin/export/` (station admin only): downloadable ZIP of station operational data, drafts and superseded submissions, equipment, columns, settings, audit snapshots, CSV tables and photo files. It excludes passwords and sessions. `manifest.json` lists counts and any missing photos; `data.json` uses Django's fixture representation. User IDs/names are in `users.json`. Export is not an automatic import/restore endpoint.

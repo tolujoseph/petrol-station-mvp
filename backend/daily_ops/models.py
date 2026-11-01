@@ -220,9 +220,29 @@ class FinancialTransaction(models.Model):
     )
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     description = models.CharField(max_length=255, blank=True)
+    column = models.ForeignKey("TransactionColumn", null=True, blank=True, on_delete=models.PROTECT)
 
     def __str__(self):
         return f"{self.transaction_type}: {self.amount}"
+
+
+class TransactionColumn(models.Model):
+    station = models.ForeignKey(Station, on_delete=models.CASCADE, related_name="transaction_columns")
+    label = models.CharField(max_length=100)
+    transaction_type = models.CharField(max_length=30, choices=FinancialTransaction.TransactionType.choices)
+    active = models.BooleanField(default=True)
+    position = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["position", "id"]
+        constraints = [models.UniqueConstraint(fields=["station", "label"], name="unique_station_column_label")]
+
+
+class EntryEdit(models.Model):
+    entry = models.ForeignKey(DailyEntry, on_delete=models.CASCADE, related_name="edits")
+    edited_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    edited_at = models.DateTimeField(auto_now_add=True)
+    before = models.JSONField()
 
 
 class ProductSettings(models.Model):

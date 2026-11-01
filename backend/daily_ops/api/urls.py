@@ -20,7 +20,17 @@ from .views import (
     TankEvidenceUploadView,
 )
 
+from .owner_views import ColumnsView, ColumnDetailView, EquipmentSettingsView, EquipmentVisibilityView, SavedEntryView
+from .export_views import AdminExportView
+
 urlpatterns = [
+    path("station/columns/", ColumnsView.as_view()),
+    path("station/columns/<int:column_id>/", ColumnDetailView.as_view()),
+    path("station/settings/equipment/", EquipmentSettingsView.as_view()),
+    path("station/settings/equipment/<str:kind>/<int:equipment_id>/", EquipmentVisibilityView.as_view()),
+    path("saved-entries/", SavedEntryView.as_view()),
+    path("saved-entries/<int:entry_id>/", SavedEntryView.as_view()),
+    path("admin/export/", AdminExportView.as_view()),
     # Authentication and CSRF
     path(
         "auth/me/",

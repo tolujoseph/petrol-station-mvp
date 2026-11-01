@@ -13,6 +13,8 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.test import Client
 
+from daily_ops.columns import seed_columns
+
 from daily_ops.models import (
     DailyEntry,
     DailyResult,
@@ -30,8 +32,8 @@ from daily_ops.models import (
 DEMO_STATION = "Omesh"
 DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "omesh")
 
-# Mirrors the station's spreadsheet: four petrol pumps, one diesel pump, two petrol pits and a diesel pit.
-PUMPS = [("Pump 1", "PMS", "251613.93"), ("Pump 2", "PMS", "734049.99"), ("Pump 3", "PMS", "468141.93"), ("Pump 4", "PMS", "731284.90"), ("Pump 5", "AGO", "500459.63")]
+# Six petrol pumps and two diesel pumps; owners can change visibility later.
+PUMPS = [("Pump 1", "PMS", "251613.93"), ("Pump 2", "PMS", "734049.99"), ("Pump 3", "PMS", "468141.93"), ("Pump 4", "PMS", "731284.90"), ("Pump 5", "PMS", "0"), ("Pump 6", "PMS", "0"), ("AGO Pump 1", "AGO", "500459.63"), ("AGO Pump 2", "AGO", "0")]
 TANKS = [("Pit 1", "PMS", "6000"), ("Pit 2", "PMS", "13500"), ("Pit 3", "AGO", "9000")]
 # Selling price and landing cost per litre, from late May in the spreadsheet.
 PRICES = {"PMS": ("880.00", "840.50"), "AGO": ("990.00", "971.00")}
@@ -72,6 +74,7 @@ class Command(BaseCommand):
             user.set_password(DEMO_PASSWORD)
             user.save()
 
+        seed_columns(station)
         self.seed_settings(station)
         if options["days"] > 0:
             self.seed_history(station, options["days"])
