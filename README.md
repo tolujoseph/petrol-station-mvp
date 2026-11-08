@@ -20,7 +20,7 @@ The frontend has its own sign-in screen (Django session login).
 
 ## Demo logins
 
-The app is set up for one company, **Omesh**. `python manage.py seed_demo` creates the Omesh station (pumps, pits, prices, checking rules), these logins and the past 2 days of reconciled history (`--days N` for more, `--days 0` for none). The Cloud Run deployment starts with no records (`SEED_DEMO_DAYS`, default 0 in `scripts/deploy-gcp.sh`). `--reset` wipes every station, record and setting first. All logins use the password `omesh` (override with `DEMO_PASSWORD`), locally and on the Cloud Run deployment:
+The app is set up for one company, **Omesh**. `python manage.py seed_demo` creates the Omesh station (pumps, pits, prices, checking rules), these logins and the past 2 days of reconciled history (`--days N` for more, `--days 0` for none). Cloud Run uses persistent Postgres and does not run demo seeding. `--reset` wipes every station, record and setting first. The initial demo logins use the password `omesh` (`DEMO_PASSWORD` overrides local seeding). Production keeps its existing accounts and never resets passwords during deployment:
 
 | User | Role |
 |---|---|
@@ -39,4 +39,13 @@ Owners can create financial columns and hide/restore columns, pumps and tanks fr
 
 Before each deployment, sign in as `omesh-admin`, open **Admin**, and choose **Download all data**. Keep the ZIP outside the server. It includes CSV tables, structured operational data, settings, edit history, user identifiers (without credentials), and available photos. `manifest.json` lists missing photo files, if any. This is an export, not an automatic restore feature.
 
-Cloud Run still uses ephemeral SQLite/media storage: a restart or deployment can clear live records. Manual exports do not prevent that loss. No persistent database is provisioned by this change.
+Cloud Run uses Neon Postgres for accounts, entries, settings, and results. These survive restarts and deployments. Uploaded photo files still use ephemeral local storage; continue exporting photos until persistent file storage is configured.
+
+
+## Production database
+
+Set `DATABASE_URL` to a Postgres URL. The URL is parsed with `dj-database-url` and the backend uses Psycopg 3. TLS URL options (including channel binding) are preserved; server-side cursors and prepared statements are disabled for the transaction pooler. Connections have health checks and a 60-second lifetime. Local development still uses SQLite when the URL is absent. On Cloud Run (`K_SERVICE` set), a missing URL fails startup instead of silently creating an ephemeral database.
+
+The deployment script binds `DATABASE_URL` to the existing GCP Secret Manager secret `petrol-station-database-url` (override its name with `DATABASE_SECRET`, or version with `DATABASE_SECRET_VERSION`). Only the runtime service account needs Secret Accessor on that secret. Do not commit connection strings. `SEED_DEMO=0` in production; the entrypoint also skips seeding whenever Postgres is configured. Migrations still run at startup.
+
+Deploy with `GCP_PROJECT=project-297b4c36-ed50-4f5d-846 ./scripts/deploy-gcp.sh`. The script requires the database secret to exist and retains its binding on future deploys. Existing station configuration was imported from the admin ZIP export. Backups remain available from Admin.

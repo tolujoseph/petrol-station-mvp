@@ -7,7 +7,7 @@ python manage.py migrate --noinput
 
 # Demo deployments only: load the Omesh logins, equipment and settings into the (ephemeral) SQLite database,
 # plus SEED_DEMO_DAYS days of sample history (default 2; 0 starts with no records).
-if [ "${SEED_DEMO:-}" = "1" ]; then
+if [ "${SEED_DEMO:-}" = "1" ] && [ -z "${DATABASE_URL:-}" ]; then
   python manage.py seed_demo --days "${SEED_DEMO_DAYS:-2}"
 fi
 

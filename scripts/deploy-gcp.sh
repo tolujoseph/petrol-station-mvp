@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploys the Django backend to Cloud Run as its own service (demo setup: SQLite, data resets on restart).
+# Deploy Django to Cloud Run. Production requires a Secret Manager DATABASE_URL binding.
 # Usage: GCP_PROJECT=<project-id> ./scripts/deploy-gcp.sh
 set -euo pipefail
 cd "$(dirname "$0")/../backend"
@@ -19,8 +19,10 @@ SERVICE_URL="https://${SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"
 existing() { gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
   --format="value(spec.template.spec.containers[0].env.filter(name:$1).extract(value).flatten())" 2>/dev/null || true; }
 SECRET_KEY="$(existing DJANGO_SECRET_KEY)"; SECRET_KEY="${SECRET_KEY:-$(openssl rand -base64 48 | tr -d '\n/+=')}"
-# Shared password for the omesh-* logins; override with DEMO_PASSWORD.
-DEMO_PASSWORD_VALUE="${DEMO_PASSWORD:-omesh}"
+# This stable secret name is retained on every deployment. Never fall back to ephemeral SQLite.
+DATABASE_SECRET="${DATABASE_SECRET:-petrol-station-database-url}"
+DATABASE_SECRET_VERSION="${DATABASE_SECRET_VERSION:-latest}"
+gcloud secrets versions describe "$DATABASE_SECRET_VERSION" --secret "$DATABASE_SECRET" --project "$PROJECT" --format='value(state)' >/dev/null
 
 ENV_FILE="$(mktemp)"; trap 'rm -f "$ENV_FILE"' EXIT
 cat > "$ENV_FILE" <<YAML
@@ -32,17 +34,16 @@ DJANGO_CORS_ALLOWED_ORIGINS: "${EXTRA_ORIGINS}"
 DJANGO_BEHIND_PROXY: "true"
 DJANGO_DB_PATH: "/app/data/db.sqlite3"
 DJANGO_MEDIA_ROOT: "/app/media"
-SEED_DEMO: "1"
-SEED_DEMO_DAYS: "${SEED_DEMO_DAYS:-0}"
-DEMO_PASSWORD: "${DEMO_PASSWORD_VALUE}"
+SEED_DEMO: "0"
 YAML
 
-# One instance only: SQLite lives on the instance's local disk.
+# Keep the existing service sizing; the database is external and persistent.
 gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" --source . \
   --allow-unauthenticated --min-instances 1 --max-instances 1 --memory 512Mi \
-  --env-vars-file "$ENV_FILE" --quiet
+  --env-vars-file "$ENV_FILE" \
+  --update-secrets "DATABASE_URL=${DATABASE_SECRET}:${DATABASE_SECRET_VERSION}" --quiet
 
 echo
 echo "Service:        $SERVICE_URL"
 echo "Django admin:   $SERVICE_URL/admin/"
-echo "Logins:         omesh-manager / omesh-owner / omesh-admin   password: $DEMO_PASSWORD_VALUE"
+echo "Database:       Postgres (Secret Manager: $DATABASE_SECRET)"

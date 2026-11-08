@@ -6,3 +6,8 @@ media
 staticfiles
 .vscode
 .git
+
+.env
+.env.*
+*.sqlite3
+backups/
