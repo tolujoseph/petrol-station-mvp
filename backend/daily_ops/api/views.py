@@ -34,7 +34,7 @@ from ..models import (
 )
 from ..services.orchestration import simulate_daily_entry, save_daily_result
 from ..services.querysets import official_daily_entry_ids
-from .permissions import IsManager, IsStationAdmin
+from .permissions import IsOwner, IsManager, IsStationAdmin
 from .serializers import (
     DailyEntrySerializer,
     DailyResultSerializer,
@@ -117,6 +117,38 @@ class StationEquipmentView(APIView):
         })
 
 
+def refresh_price_results(station, start):
+    from ..services.orchestration import save_daily_result, simulate_daily_entry
+    from ..services.querysets import official_daily_entry_ids
+    entries = DailyEntry.objects.filter(id__in=official_daily_entry_ids(station), entry_date__gte=start).order_by('entry_date')
+    try:
+        for entry in entries:
+            save_daily_result(entry, simulate_daily_entry(entry))
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+
+
+class StationProductSettingsDetailView(APIView):
+    permission_classes = [IsOwner]
+
+    def patch(self, request, setting_id):
+        with transaction.atomic():
+            row = ProductSettings.objects.select_for_update().filter(station=request.user.station, pk=setting_id).first()
+            if row is None:
+                raise Http404()
+            if set(request.data) - {'selling_price', 'landing_cost', 'effective_from'}:
+                raise ValidationError('Only the price, cost and start date can be edited.')
+            old_start = row.effective_from
+            serializer = ProductSettingsSerializer(row, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            new_start = serializer.validated_data.get('effective_from', old_start)
+            if ProductSettings.objects.filter(station=request.user.station, product_type=row.product_type, effective_from=new_start).exclude(pk=row.pk).exists():
+                raise ValidationError({'effective_from': 'Settings already exist for this product and effective date.'})
+            serializer.save()
+            refresh_price_results(request.user.station, min(old_start, new_start))
+        return Response(serializer.data)
+
+
 class StationProductSettingsView(APIView):
     """Read station product settings; owners may add effective-dated versions."""
     permission_classes = [IsAuthenticated]
@@ -145,7 +177,9 @@ class StationProductSettingsView(APIView):
             raise ValidationError({
                 "effective_from": "Settings already exist for this product and effective date."
             })
-        instance = serializer.save(station=request.user.station)
+        with transaction.atomic():
+            instance = serializer.save(station=request.user.station)
+            refresh_price_results(request.user.station, instance.effective_from)
         return Response(ProductSettingsSerializer(instance).data, status=status.HTTP_201_CREATED)
 
 

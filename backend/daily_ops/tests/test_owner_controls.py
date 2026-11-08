@@ -142,3 +142,26 @@ class OwnerControlsTests(TestCase):
             self.assertNotIn(b'password', archive.read('users.json'))
             self.assertIn(b"'=HYPERLINK", archive.read('entries.csv'))
             self.assertEqual(json.loads(archive.read('manifest.json'))['missing_photos'], [])
+
+    def test_price_date_edit_persists_and_recalculates_affected_days(self):
+        created = self.client.post('/api/station/settings/products/', {'product_type': 'PMS', 'selling_price': '200', 'landing_cost': '80', 'effective_from': '2026-10-03'}, format='json')
+        self.assertEqual(created.status_code, 201, created.data)
+        path = f"/api/station/settings/products/{created.data['id']}/"
+        response = self.client.patch(path, {'effective_from': '2026-10-02'}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['effective_from'], '2026-10-02')
+        saved = next(row for row in self.client.get('/api/station/settings/products/').data if row['id'] == created.data['id'])
+        self.assertEqual(saved['effective_from'], '2026-10-02')
+        self.assertEqual(DailyResult.objects.get(daily_entry=self.entries[1]).expected_revenue, Decimal('20000'))
+        self.assertEqual(self.client.patch(path, {'effective_from': '2026-01-01'}, format='json').status_code, 400)
+        self.client.force_authenticate(self.manager)
+        self.assertEqual(self.client.patch(path, {'effective_from': '2026-10-04'}, format='json').status_code, 403)
+        self.client.force_authenticate(self.stranger)
+        self.assertEqual(self.client.patch(path, {'effective_from': '2026-10-04'}, format='json').status_code, 404)
+
+    def test_invalid_price_date_correction_rolls_back(self):
+        row = ProductSettings.objects.get(station=self.station)
+        response = self.client.patch(f'/api/station/settings/products/{row.id}/', {'effective_from': '2026-12-01'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        row.refresh_from_db()
+        self.assertEqual(row.effective_from, date(2026, 1, 1))

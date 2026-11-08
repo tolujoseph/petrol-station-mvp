@@ -16,6 +16,7 @@ from .views import (
     PumpEvidenceUploadView,
     StationEquipmentView,
     StationProductSettingsView,
+    StationProductSettingsDetailView,
     StationReconciliationSettingsView,
     TankEvidenceUploadView,
 )
@@ -26,6 +27,7 @@ from .export_views import AdminExportView
 from .media_views import AdminMediaView, AdminMediaDeleteView, AdminMediaExportView, AdminMediaRetryView, MediaFileView
 
 urlpatterns = [
+    path("station/settings/products/<int:setting_id>/", StationProductSettingsDetailView.as_view()),
     path("admin/media/", AdminMediaView.as_view()),
     path("admin/media/delete/", AdminMediaDeleteView.as_view()),
     path("admin/media/export/", AdminMediaExportView.as_view()),
