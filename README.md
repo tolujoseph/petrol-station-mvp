@@ -39,7 +39,7 @@ Owners can create financial columns and hide/restore columns, pumps and tanks fr
 
 Before each deployment, sign in as `omesh-admin`, open **Admin**, and choose **Download all data**. Keep the ZIP outside the server. It includes CSV tables, structured operational data, settings, edit history, user identifiers (without credentials), and available photos. `manifest.json` lists missing photo files, if any. This is an export, not an automatic restore feature.
 
-Cloud Run uses Neon Postgres for accounts, entries, settings, and results. These survive restarts and deployments. Uploaded photo files still use ephemeral local storage; continue exporting photos until persistent file storage is configured.
+Cloud Run uses Neon Postgres for accounts, entries, settings, and results. These survive restarts and deployments. Reading photos use private Cloudinary storage and survive deployments. Admins can download a separate media ZIP and delete selected photos from the Admin media gallery. Photos appear beside their pump/tank readings.
 
 
 ## Production database
@@ -49,3 +49,11 @@ Set `DATABASE_URL` to a Postgres URL. The URL is parsed with `dj-database-url` a
 The deployment script binds `DATABASE_URL` to the existing GCP Secret Manager secret `petrol-station-database-url` (override its name with `DATABASE_SECRET`, or version with `DATABASE_SECRET_VERSION`). Only the runtime service account needs Secret Accessor on that secret. Do not commit connection strings. `SEED_DEMO=0` in production; the entrypoint also skips seeding whenever Postgres is configured. Migrations still run at startup.
 
 Deploy with `GCP_PROJECT=project-297b4c36-ed50-4f5d-846 ./scripts/deploy-gcp.sh`. The script requires the database secret to exist and retains its binding on future deploys. Existing station configuration was imported from the admin ZIP export. Backups remain available from Admin.
+
+### Cloudinary media
+
+Set `CLOUDINARY_URL` on the backend only. Cloud Run binds Secret Manager `petrol-station-cloudinary-url`; production startup fails without it. Local development without this variable uses filesystem storage. Uploads are authenticated Cloudinary assets with backups disabled; the application checks station/role access before serving photos. Credentials and private signed delivery URLs are never sent to the frontend.
+
+Admin endpoints: `GET /api/admin/media/` (optional `before=YYYY-MM-DD` and `page`), `GET /api/admin/media/export/`, and `POST /api/admin/media/delete/` with `{"confirm":"DELETE MEDIA","items":[{"type":"pump","id":123}]}` (up to 20 per request). Deletion destroys the Cloudinary original, requests CDN invalidation, and verifies the asset is absent through the Cloudinary origin API before removing its database record. Readings and financial data remain intact. A failed removal stays listed for retry.
+
+Deleting an entry also queues its photo removals after the database transaction commits. Failed cleanup is retained in `MediaDeletionJob`; admins can retry it from the gallery (`POST /api/admin/media/retry/`). Operators can run `python manage.py retry_media_deletions` to process pending jobs, including deleted stations. Downloaded ZIP copies are independent of Cloudinary deletion.

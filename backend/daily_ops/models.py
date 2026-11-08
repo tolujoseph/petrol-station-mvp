@@ -331,3 +331,13 @@ class DailyResult(models.Model):
 
     def __str__(self):
         return f"Result for entry {self.daily_entry_id}"
+
+
+class MediaDeletionJob(models.Model):
+    """Durable cleanup for files whose evidence row was deleted by a cascade."""
+    station = models.ForeignKey(Station, null=True, on_delete=models.SET_NULL)
+    name = models.CharField(max_length=255, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.CharField(max_length=255, blank=True)

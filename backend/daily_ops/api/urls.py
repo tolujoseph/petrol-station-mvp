@@ -23,7 +23,14 @@ from .views import (
 from .owner_views import ColumnsView, ColumnDetailView, EquipmentSettingsView, EquipmentVisibilityView, SavedEntryView
 from .export_views import AdminExportView
 
+from .media_views import AdminMediaView, AdminMediaDeleteView, AdminMediaExportView, AdminMediaRetryView, MediaFileView
+
 urlpatterns = [
+    path("admin/media/", AdminMediaView.as_view()),
+    path("admin/media/delete/", AdminMediaDeleteView.as_view()),
+    path("admin/media/export/", AdminMediaExportView.as_view()),
+    path("admin/media/retry/", AdminMediaRetryView.as_view()),
+    path("media/file/", MediaFileView.as_view()),
     path("station/columns/", ColumnsView.as_view()),
     path("station/columns/<int:column_id>/", ColumnDetailView.as_view()),
     path("station/settings/equipment/", EquipmentSettingsView.as_view()),

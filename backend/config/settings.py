@@ -186,3 +186,13 @@ LOGOUT_REDIRECT_URL = "/api/auth/me/"
 # Local media storage for development.
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.environ.get("DJANGO_MEDIA_ROOT", BASE_DIR / "media")
+
+CLOUDINARY_URL = os.environ.get('CLOUDINARY_URL', '')
+if os.environ.get('K_SERVICE') and not CLOUDINARY_URL:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured('CLOUDINARY_URL is required on Cloud Run to persist evidence.')
+
+STORAGES = {
+    'default': {'BACKEND': 'daily_ops.storage.CloudinaryEvidenceStorage' if CLOUDINARY_URL else 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+}

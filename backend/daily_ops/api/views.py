@@ -343,15 +343,6 @@ class DailyEntryCreateView(APIView):
         }, status=status.HTTP_200_OK)
 
 
-def schedule_evidence_file_deletion(evidence_rows):
-    """Delete stored image files after the surrounding DB transaction commits."""
-    for evidence in evidence_rows:
-        image = getattr(evidence, "image", None)
-        if image and image.name:
-            storage = image.storage
-            name = image.name
-            transaction.on_commit(lambda storage=storage, name=name: storage.delete(name))
-
 
 class DailyEntryDetailView(APIView):
     """Retrieve, update, or explicitly discard a manager-owned draft."""
@@ -452,8 +443,6 @@ class DailyEntryDetailView(APIView):
                 existing = {row.pump_id: row for row in entry.pump_readings.select_related("pump")}
                 incoming_ids = set(pump_ids)
                 removed_readings = entry.pump_readings.exclude(pump_id__in=incoming_ids)
-                removed_evidence = [evidence for reading in removed_readings for evidence in reading.evidence_photos.all()]
-                schedule_evidence_file_deletion(removed_evidence)
                 removed_readings.delete()
                 for item in pump_inputs:
                     pump_id = item["pump"].id
@@ -473,8 +462,6 @@ class DailyEntryDetailView(APIView):
                 existing = {row.tank_id: row for row in entry.tank_readings.select_related("tank")}
                 incoming_ids = set(tank_ids)
                 removed_readings = entry.tank_readings.exclude(tank_id__in=incoming_ids)
-                removed_evidence = [evidence for reading in removed_readings for evidence in reading.evidence_photos.all()]
-                schedule_evidence_file_deletion(removed_evidence)
                 removed_readings.delete()
                 for item in tank_inputs:
                     tank_id = item["tank"].id
@@ -506,12 +493,6 @@ class DailyEntryDetailView(APIView):
                 raise Http404("Daily entry not found.")
             if entry.status != DailyEntry.Status.DRAFT:
                 raise ValidationError("Only a draft can be discarded.")
-            evidence_rows = list(PumpReadingEvidence.objects.filter(
-                pump_reading__daily_entry=entry
-            )) + list(TankReadingEvidence.objects.filter(
-                tank_reading__daily_entry=entry
-            ))
-            schedule_evidence_file_deletion(evidence_rows)
             entry.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -543,20 +524,28 @@ class EvidenceUploadBaseView(APIView):
         if reading is None:
             raise Http404("Draft reading not found.")
 
-        evidence_rows = [
-            self.evidence_model(
-                **{self.reading_relation: reading},
-                image=image,
-                uploaded_by=request.user,
-            )
-            for image in serializer.validated_data["images"]
-        ]
-
-        self.evidence_model.objects.bulk_create(evidence_rows)
+        evidence_rows = []
+        saved_names = []
+        try:
+            with transaction.atomic():
+                for image in serializer.validated_data["images"]:
+                    row = self.evidence_model(**{self.reading_relation: reading}, uploaded_by=request.user)
+                    row.image.save(image.name, image, save=False)
+                    saved_names.append(row.image.name)
+                    row.save()
+                    evidence_rows.append(row)
+        except Exception as exc:
+            from ..media import queue_deletion
+            if getattr(exc, "storage_name", None):
+                saved_names.append(exc.storage_name)
+            for name in saved_names:
+                queue_deletion(name, request.user.station_id)
+            raise APIException("Photo upload failed. Incomplete uploads have been queued for cleanup; please retry.") from None
 
         return Response({
             "message": "Evidence uploaded successfully.",
             "uploaded_count": len(evidence_rows),
+            "evidence_ids": [row.id for row in evidence_rows],
         }, status=status.HTTP_201_CREATED)
 
 
@@ -647,7 +636,9 @@ class EvidenceImageView(APIView):
         if evidence is None or entry is None:
             raise Http404("Evidence not found.")
 
-        if request.user.role == User.Role.MANAGER:
+        if request.user.is_staff:
+            pass
+        elif request.user.role == User.Role.MANAGER:
             if entry.manager_id != request.user.id:
                 raise Http404("Evidence not found.")
         elif request.user.role == User.Role.OWNER:
@@ -656,7 +647,12 @@ class EvidenceImageView(APIView):
         else:
             raise Http404("Evidence not found.")
 
-        response = FileResponse(evidence.image.open("rb"))
+        try:
+            response = FileResponse(evidence.image.open("rb"))
+        except FileNotFoundError:
+            raise Http404("Photo file is missing.") from None
+        except OSError:
+            raise APIException("Photo storage is temporarily unavailable. Please try again.") from None
         response["Cache-Control"] = "private, no-store"
         return response
 
@@ -903,11 +899,6 @@ def station_record_counts(station):
 def delete_entries(entries):
     """Delete daily entries (readings, money lines, results and photos cascade) and their image files."""
     entries = list(entries)
-    evidence = [
-        *PumpReadingEvidence.objects.filter(pump_reading__daily_entry__in=entries),
-        *TankReadingEvidence.objects.filter(tank_reading__daily_entry__in=entries),
-    ]
-    schedule_evidence_file_deletion(evidence)
     DailyEntry.objects.filter(id__in=[entry.id for entry in entries]).delete()
     return len(entries)
 

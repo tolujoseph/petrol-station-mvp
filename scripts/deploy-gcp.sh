@@ -24,6 +24,9 @@ DATABASE_SECRET="${DATABASE_SECRET:-petrol-station-database-url}"
 DATABASE_SECRET_VERSION="${DATABASE_SECRET_VERSION:-latest}"
 gcloud secrets versions describe "$DATABASE_SECRET_VERSION" --secret "$DATABASE_SECRET" --project "$PROJECT" --format='value(state)' >/dev/null
 
+CLOUDINARY_SECRET="${CLOUDINARY_SECRET:-petrol-station-cloudinary-url}"
+gcloud secrets versions describe latest --secret "$CLOUDINARY_SECRET" --project "$PROJECT" --format='value(state)' >/dev/null
+
 ENV_FILE="$(mktemp)"; trap 'rm -f "$ENV_FILE"' EXIT
 cat > "$ENV_FILE" <<YAML
 DJANGO_DEBUG: "false"
@@ -41,7 +44,7 @@ YAML
 gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" --source . \
   --allow-unauthenticated --min-instances 1 --max-instances 1 --memory 512Mi \
   --env-vars-file "$ENV_FILE" \
-  --update-secrets "DATABASE_URL=${DATABASE_SECRET}:${DATABASE_SECRET_VERSION}" --quiet
+  --update-secrets "DATABASE_URL=${DATABASE_SECRET}:${DATABASE_SECRET_VERSION},CLOUDINARY_URL=${CLOUDINARY_SECRET}:latest" --quiet
 
 echo
 echo "Service:        $SERVICE_URL"
