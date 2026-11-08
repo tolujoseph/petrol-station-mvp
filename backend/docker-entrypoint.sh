@@ -5,6 +5,11 @@ mkdir -p "$(dirname "${DJANGO_DB_PATH:-/app/data/db.sqlite3}")" "${DJANGO_MEDIA_
 
 python manage.py migrate --noinput
 
+# Compose only: initialize an empty local Postgres database, never reset on restart.
+if [ "${LOCAL_DEMO:-}" = "1" ]; then
+  python manage.py init_local_demo
+fi
+
 # Demo deployments only: load the Omesh logins, equipment and settings into the (ephemeral) SQLite database,
 # plus SEED_DEMO_DAYS days of sample history (default 2; 0 starts with no records).
 if [ "${SEED_DEMO:-}" = "1" ] && [ -z "${DATABASE_URL:-}" ]; then

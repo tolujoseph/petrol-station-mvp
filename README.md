@@ -2,7 +2,19 @@
 
 Django REST backend (`backend/`) + React/Vite frontend (`frontend/`).
 
-## Quick start
+## Backend only with Docker (recommended for sharing)
+
+Install Docker Desktop, start it, then run:
+
+```console
+cd backend
+docker compose up --build --wait
+```
+
+Open http://localhost:8000/admin/ and sign in with `omesh-admin` / `omesh`.
+Docker supplies Python, dependencies and a local Postgres database; no production credentials are needed. Data and photos persist across restarts. See the [backend Docker README](backend/README.md) for Windows/Mac/Linux setup, API URLs, configuration, testing, backups and troubleshooting. You can share the entire `backend/` folder on its own.
+
+## Legacy combined development setup
 
 Requirements: [uv](https://docs.astral.sh/uv/) (it installs Python 3.14 for you) and Node.js.
 

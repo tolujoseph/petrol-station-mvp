@@ -1,0 +1,49 @@
+name: petrol-station-backend
+
+services:
+  db:
+    image: postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
+    environment:
+      POSTGRES_DB: petrol_local
+      POSTGRES_USER: petrol_local
+      POSTGRES_PASSWORD: local-development-only
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U petrol_local -d petrol_local"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8080"
+    environment:
+      # Explicit local settings: never inherit a production DATABASE_URL.
+      DATABASE_URL: postgresql://petrol_local:local-development-only@db:5432/petrol_local?sslmode=disable
+      DJANGO_DEBUG: "true"
+      DJANGO_SECRET_KEY: local-docker-development-only-not-for-production
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,api,testserver
+      DJANGO_CORS_ALLOWED_ORIGINS: "http://127.0.0.1:5173,${LOCAL_FRONTEND_ORIGIN:-http://localhost:5173}"
+      DJANGO_CSRF_TRUSTED_ORIGINS: "http://127.0.0.1:5173,${LOCAL_FRONTEND_ORIGIN:-http://localhost:5173}"
+      DJANGO_MEDIA_ROOT: /app/media
+      CLOUDINARY_URL: "${LOCAL_CLOUDINARY_URL:-}"
+      LOCAL_DEMO: "1"
+      SEED_DEMO: "0"
+      PORT: "8080"
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "docker-healthcheck.py"]
+      interval: 5s
+      timeout: 5s
+      start_period: 30s
+      retries: 20
+
+volumes:
+  postgres_data:
+  media_data:

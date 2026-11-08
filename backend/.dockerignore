@@ -11,3 +11,6 @@ staticfiles
 .env.*
 *.sqlite3
 backups/
+
+*.dump
+*.tar.gz
